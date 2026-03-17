@@ -1,0 +1,190 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-base: #1a1a2e;
+  --bg-panel: #16213e;
+  --bg-card: #0f3460;
+  --accent: #e94560;
+  --accent2: #533483;
+  --text: #eee;
+  --text-dim: #999;
+  --border: #2a2a4a;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background: var(--bg-base);
+  color: var(--text);
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+}
+
+#root {
+  height: 100vh;
+  width: 100vw;
+  display: flex;
+  flex-direction: column;
+}
+
+.panel {
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+}
+
+.panel-section {
+  border-bottom: 1px solid var(--border);
+  padding: 8px;
+}
+
+.panel-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+
+.tool-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text-dim);
+  transition: all 0.15s;
+  border: none;
+  background: transparent;
+  position: relative;
+}
+
+.tool-btn:hover {
+  background: rgba(255,255,255,0.08);
+  color: var(--text);
+}
+
+.tool-btn.active {
+  background: var(--accent);
+  color: white;
+}
+
+.input-field {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 4px 8px;
+  font-size: 12px;
+  width: 100%;
+  outline: none;
+}
+
+.input-field:focus {
+  border-color: var(--accent);
+}
+
+.icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  transition: all 0.15s;
+}
+
+.icon-btn:hover {
+  background: rgba(255,255,255,0.1);
+  color: var(--text);
+}
+
+.checkerboard {
+  background-image: linear-gradient(45deg, #333 25%, transparent 25%),
+    linear-gradient(-45deg, #333 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #333 75%),
+    linear-gradient(-45deg, transparent 75%, #333 75%);
+  background-size: 12px 12px;
+  background-position: 0 0, 0 6px, 6px -6px, -6px 0px;
+  background-color: #222;
+}
+
+.canvas-container {
+  overflow: hidden;
+  cursor: crosshair;
+}
+
+.canvas-container.select-cursor {
+  cursor: default;
+}
+
+.canvas-container.pan-cursor {
+  cursor: grab;
+}
+
+.canvas-container.pan-cursor:active {
+  cursor: grabbing;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 2px;
+}
+
+/* Prevent text selection during drag */
+.no-select {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Color swatch */
+.color-swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  border: 1px solid rgba(255,255,255,0.2);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* Layer item */
+.layer-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.layer-item:hover {
+  background: rgba(255,255,255,0.05);
+  color: var(--text);
+}
+.layer-item.selected {
+  background: rgba(233,69,96,0.15);
+  color: var(--text);
+}
