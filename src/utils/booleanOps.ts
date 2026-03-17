@@ -45,40 +45,87 @@ function polygonShapeToRing(s: PolygonShape): Ring {
   return ring
 }
 
-function pathToRing(s: PathShape): Ring {
-  // Extract coordinate pairs from M/L path data
-  const tokens = s.d.match(/[MmLlZz]|[-\d.]+/g) ?? []
-  const ring: Ring = []
+/**
+ * Parse an SVG path `d` into a Polygon (array of rings).
+ * Each M…Z subpath becomes one ring — so a path with a hole becomes
+ * Polygon = [outerRing, holeRing], which polygon-clipping handles correctly.
+ * Curve commands (C, Q, A, etc.) use their endpoint only (linear approximation).
+ */
+function pathToPolygon(s: PathShape): Polygon | null {
+  // Match all command letters and numeric tokens (including scientific notation)
+  const tokens = s.d.match(/[MmLlZzHhVvCcSsQqTtAa]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/g) ?? []
+
+  const rings: Ring[] = []
+  let current: [number, number][] = []
   let cmd = ''
+  let cx = 0, cy = 0
+
+  const n = (offset: number) => parseFloat(tokens[i + offset] ?? '0')
+
+  const closeAndPush = () => {
+    if (current.length >= 3) {
+      const r: Ring = [...current] as Ring
+      // Ensure closed
+      if (r[r.length - 1][0] !== r[0][0] || r[r.length - 1][1] !== r[0][1]) r.push(r[0])
+      rings.push(r)
+    }
+    current = []
+  }
+
   let i = 0
   while (i < tokens.length) {
     const t = tokens[i]
-    if (/[MmLlZz]/.test(t)) { cmd = t; i++; continue }
-    const x = parseFloat(t)
-    const y = parseFloat(tokens[i + 1] ?? '0')
-    if (!isNaN(x) && !isNaN(y) && (cmd === 'M' || cmd === 'L')) {
-      ring.push([x, y])
+    if (/[MmLlZzHhVvCcSsQqTtAa]/.test(t)) {
+      cmd = t; i++
+      if (cmd === 'Z' || cmd === 'z') closeAndPush()
+      continue
     }
-    i += 2
+    switch (cmd) {
+      case 'M': closeAndPush(); cx = n(0); cy = n(1); current.push([cx, cy]); i += 2; cmd = 'L'; break
+      case 'm': closeAndPush(); cx += n(0); cy += n(1); current.push([cx, cy]); i += 2; cmd = 'l'; break
+      case 'L': cx = n(0); cy = n(1); current.push([cx, cy]); i += 2; break
+      case 'l': cx += n(0); cy += n(1); current.push([cx, cy]); i += 2; break
+      case 'H': cx = n(0); current.push([cx, cy]); i += 1; break
+      case 'h': cx += n(0); current.push([cx, cy]); i += 1; break
+      case 'V': cy = n(0); current.push([cx, cy]); i += 1; break
+      case 'v': cy += n(0); current.push([cx, cy]); i += 1; break
+      // Cubic bezier — skip 2 control points, use endpoint
+      case 'C': cx = n(4); cy = n(5); current.push([cx, cy]); i += 6; break
+      case 'c': cx += n(4); cy += n(5); current.push([cx, cy]); i += 6; break
+      // Smooth cubic — skip 1 control point, use endpoint
+      case 'S': cx = n(2); cy = n(3); current.push([cx, cy]); i += 4; break
+      case 's': cx += n(2); cy += n(3); current.push([cx, cy]); i += 4; break
+      // Quadratic bezier — skip control point, use endpoint
+      case 'Q': cx = n(2); cy = n(3); current.push([cx, cy]); i += 4; break
+      case 'q': cx += n(2); cy += n(3); current.push([cx, cy]); i += 4; break
+      // Smooth quadratic
+      case 'T': cx = n(0); cy = n(1); current.push([cx, cy]); i += 2; break
+      case 't': cx += n(0); cy += n(1); current.push([cx, cy]); i += 2; break
+      // Arc — skip rx, ry, x-rotation, large-arc-flag, sweep-flag; use endpoint
+      case 'A': cx = n(5); cy = n(6); current.push([cx, cy]); i += 7; break
+      case 'a': cx += n(5); cy += n(6); current.push([cx, cy]); i += 7; break
+      default: i++
+    }
   }
-  if (ring.length > 0) ring.push(ring[0])
-  return ring
+  closeAndPush() // flush any unclosed final subpath
+
+  if (rings.length === 0) return null
+  // Return all rings as one Polygon: first ring = outer boundary, rest = holes.
+  // polygon-clipping uses winding direction to determine outer/hole automatically.
+  return rings as Polygon
 }
 
 function shapeToPolygon(shape: Shape): Polygon | null {
-  let ring: Ring
   try {
     switch (shape.type) {
-      case 'rect':    ring = rectToRing(shape); break
-      case 'circle':  ring = circleToRing(shape); break
-      case 'ellipse': ring = ellipseToRing(shape); break
-      case 'polygon': ring = polygonShapeToRing(shape); break
-      case 'path':    ring = pathToRing(shape); break
+      case 'rect':    return [rectToRing(shape)]
+      case 'circle':  { const r = circleToRing(shape); return r.length >= 4 ? [r] : null }
+      case 'ellipse': { const r = ellipseToRing(shape); return r.length >= 4 ? [r] : null }
+      case 'polygon': { const r = polygonShapeToRing(shape); return r.length >= 4 ? [r] : null }
+      case 'path':    return pathToPolygon(shape)
       default: return null
     }
   } catch { return null }
-  if (ring.length < 4) return null
-  return [ring]
 }
 
 // ── MultiPolygon → SVG path string ───────────────────────────────────────

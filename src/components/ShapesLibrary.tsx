@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react'
 import { useEditorStore } from '../store/useEditorStore'
 import { SHAPE_PRESETS, PRESET_CATEGORIES, type ShapePreset } from '../data/shapePresets'
 
+const DRAG_THRESHOLD = 6 // px before treating pointer move as a drag
+
 export function ShapesLibraryButton() {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -32,14 +34,11 @@ export function ShapesLibraryButton() {
 
 function ShapesLibraryPanel({ onClose }: { onClose: () => void }) {
   const [activeCategory, setActiveCategory] = useState(PRESET_CATEGORIES[0])
-  const { addShape, canvasSize } = useEditorStore()
   const { setDraggingPreset } = useEditorStore()
 
   const filtered = SHAPE_PRESETS.filter((p) => p.category === activeCategory)
 
-  function handlePresetPointerDown(e: React.PointerEvent, preset: ShapePreset) {
-    e.preventDefault()
-    e.stopPropagation()
+  function handlePresetDragStart(e: React.PointerEvent, preset: ShapePreset) {
     setDraggingPreset(preset)
     onClose()
   }
@@ -118,7 +117,8 @@ function ShapesLibraryPanel({ onClose }: { onClose: () => void }) {
           <PresetItem
             key={preset.id}
             preset={preset}
-            onPointerDown={handlePresetPointerDown}
+            onDragStart={handlePresetDragStart}
+            onClose={onClose}
           />
         ))}
       </div>
@@ -132,18 +132,45 @@ function ShapesLibraryPanel({ onClose }: { onClose: () => void }) {
 
 function PresetItem({
   preset,
-  onPointerDown,
+  onDragStart,
+  onClose,
 }: {
   preset: ShapePreset
-  onPointerDown: (e: React.PointerEvent, preset: ShapePreset) => void
+  onDragStart: (e: React.PointerEvent, preset: ShapePreset) => void
+  onClose: () => void
 }) {
   const { addShape, canvasSize } = useEditorStore()
+  const pointerStartRef = useRef<{ x: number; y: number } | null>(null)
+  const draggedRef = useRef(false)
 
-  function handleClick() {
-    const cx = canvasSize.width / 2
-    const cy = canvasSize.height / 2
-    const size = Math.min(canvasSize.width, canvasSize.height) * 0.3
-    addShape(preset.create(cx, cy, size) as any)
+  function handlePointerDown(e: React.PointerEvent) {
+    pointerStartRef.current = { x: e.clientX, y: e.clientY }
+    draggedRef.current = false
+    e.stopPropagation()
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  }
+
+  function handlePointerMove(e: React.PointerEvent) {
+    if (!pointerStartRef.current || draggedRef.current) return
+    const dx = e.clientX - pointerStartRef.current.x
+    const dy = e.clientY - pointerStartRef.current.y
+    if (Math.hypot(dx, dy) > DRAG_THRESHOLD) {
+      draggedRef.current = true
+      onDragStart(e, preset) // sets draggingPreset + closes panel
+    }
+  }
+
+  function handlePointerUp() {
+    if (!draggedRef.current) {
+      // Click: add to canvas center
+      const cx = canvasSize.width / 2
+      const cy = canvasSize.height / 2
+      const size = Math.min(canvasSize.width, canvasSize.height) * 0.3
+      addShape(preset.create(cx, cy, size) as any)
+      onClose()
+    }
+    pointerStartRef.current = null
+    draggedRef.current = false
   }
 
   return (
@@ -156,8 +183,9 @@ function PresetItem({
         cursor: 'grab',
         userSelect: 'none',
       }}
-      onClick={handleClick}
-      onPointerDown={(e) => onPointerDown(e, preset)}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
       title={`${preset.name} — drag to canvas or click to add`}
     >
       <div
