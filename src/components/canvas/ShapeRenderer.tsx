@@ -1,6 +1,5 @@
 import React from 'react'
-import type { Shape } from '../../types/shapes'
-import type { GradientFill } from '../../types/shapes'
+import type { Shape, GradientFill, ShapeFilters } from '../../types/shapes'
 import { polygonPoints } from '../../utils/geometry'
 
 interface Props {
@@ -9,6 +8,44 @@ interface Props {
   onPointerDown: (e: React.PointerEvent, id: string) => void
   activeTool: string
   isEditing?: boolean  // hide while inline text editor is active
+}
+
+// SVG filter region uses objectBoundingBox fractions by default.
+// "-60%" / "220%" gives enough room for large offsets + blur spreads.
+const SHADOW_REGION = { x: '-60%', y: '-60%', width: '220%', height: '220%' }
+
+function renderFilterDef(id: string, f: ShapeFilters): React.ReactElement | null {
+  const shadow = f.shadow?.enabled ? f.shadow : null
+  const blur   = f.blur?.enabled   ? f.blur   : null
+  if (!shadow && !blur) return null
+
+  const fid = `fx-${id}`
+
+  if (shadow && blur) {
+    return (
+      <filter id={fid} {...SHADOW_REGION}>
+        <feGaussianBlur in="SourceGraphic" stdDeviation={blur.amount} result="bodyBlur" />
+        <feGaussianBlur in="SourceAlpha"   stdDeviation={shadow.blur}  result="shadowBlur" />
+        <feOffset       in="shadowBlur"    dx={shadow.dx} dy={shadow.dy} result="shadowOff" />
+        <feFlood        floodColor={shadow.color} floodOpacity={shadow.opacity} result="flood" />
+        <feComposite    in="flood" in2="shadowOff" operator="in" result="shadow" />
+        <feMerge><feMergeNode in="shadow" /><feMergeNode in="bodyBlur" /></feMerge>
+      </filter>
+    )
+  }
+  if (shadow) {
+    return (
+      <filter id={fid} {...SHADOW_REGION}>
+        <feDropShadow dx={shadow.dx} dy={shadow.dy} stdDeviation={shadow.blur}
+          floodColor={shadow.color} floodOpacity={shadow.opacity} />
+      </filter>
+    )
+  }
+  return (
+    <filter id={fid}>
+      <feGaussianBlur stdDeviation={blur!.amount} />
+    </filter>
+  )
 }
 
 function renderGradientDef(shape: Shape): React.ReactElement | null {
@@ -44,6 +81,9 @@ export function ShapeRenderer({ shape, isSelected, onPointerDown, activeTool, is
   const pe = isSelectTool ? 'all' : 'none'
 
   const fillValue = shape.gradientFill ? `url(#grad-${shape.id})` : shape.fill
+  const gradDef   = renderGradientDef(shape)
+  const filterDef = shape.filters ? renderFilterDef(shape.id, shape.filters) : null
+  const filterAttr = filterDef ? `url(#fx-${shape.id})` : undefined
 
   const common = {
     fill: fillValue,
@@ -53,6 +93,7 @@ export function ShapeRenderer({ shape, isSelected, onPointerDown, activeTool, is
     strokeDasharray: shape.strokeDasharray || undefined,
     strokeLinecap: (shape.strokeLinecap || 'round') as 'butt' | 'round' | 'square',
     opacity: shape.opacity,
+    filter: filterAttr,
     pointerEvents: pe as 'all' | 'none',
     onPointerDown: (e: React.PointerEvent) => {
       if (!isSelectTool) return
@@ -70,13 +111,11 @@ export function ShapeRenderer({ shape, isSelected, onPointerDown, activeTool, is
     ? { transform: transforms.join(' '), transformBox: 'fill-box' as any, transformOrigin: 'center' }
     : {}
 
-  const gradDef = renderGradientDef(shape)
-
   function wrapWithDefs(el: React.ReactElement): React.ReactElement {
-    if (!gradDef) return el
+    if (!gradDef && !filterDef) return el
     return (
       <>
-        <defs>{gradDef}</defs>
+        <defs>{gradDef}{filterDef}</defs>
         {el}
       </>
     ) as unknown as React.ReactElement

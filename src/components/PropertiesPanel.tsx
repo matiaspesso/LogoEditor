@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react'
 import { useEditorStore } from '../store/useEditorStore'
-import type { Shape } from '../types/shapes'
+import type { Shape, DropShadow, BlurEffect, ShapeFilters } from '../types/shapes'
 import { ColorPicker } from './ui/ColorPicker'
 import { AlignBar } from './ui/AlignBar'
 import { GradientEditor } from './ui/GradientEditor'
@@ -94,6 +94,138 @@ function NumInput({ label, value, onChange, min, max, step = 1, unit = '' }: {
           style={{ flex: 1 }}
         />
         {unit && <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>{unit}</span>}
+      </div>
+    </div>
+  )
+}
+
+function SliderRow({ label, value, onChange, min = 0, max = 1, step = 0.01 }: {
+  label: string; value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number
+}) {
+  return (
+    <div className="flex items-center gap-2 mb-1">
+      <span className="panel-label" style={{ margin: 0, width: 48, flexShrink: 0 }}>{label}</span>
+      <input
+        type="range" min={min} max={max} step={step} value={value}
+        onChange={(e) => onChange(parseFloat(e.target.value))}
+        style={{ flex: 1, accentColor: 'var(--accent)' }}
+      />
+      <span style={{ fontSize: 10, color: 'var(--text-dim)', width: 28, textAlign: 'right' }}>
+        {Math.round(value * 100) / 100}
+      </span>
+    </div>
+  )
+}
+
+const DEFAULT_SHADOW: DropShadow = { enabled: true, dx: 2, dy: 2, blur: 3, color: '#000000', opacity: 0.5 }
+const DEFAULT_BLUR: BlurEffect   = { enabled: true, amount: 2 }
+
+function FXPanel({ shape }: { shape: Shape }) {
+  const { updateShape, commit } = useEditorStore()
+  const [shadowColorOpen, setShadowColorOpen] = useState(false)
+  const shadowSwatchRef = useRef<HTMLButtonElement>(null)
+
+  const fx: ShapeFilters = shape.filters ?? {}
+  const shadow = fx.shadow
+  const blur   = fx.blur
+
+  const setFx = (next: ShapeFilters) => { updateShape(shape.id, { filters: next } as any); commit() }
+  const setFxLive = (next: ShapeFilters) => updateShape(shape.id, { filters: next } as any)
+
+  const toggleShadow = () => {
+    if (!shadow) setFx({ ...fx, shadow: { ...DEFAULT_SHADOW } })
+    else setFx({ ...fx, shadow: { ...shadow, enabled: !shadow.enabled } })
+  }
+  const toggleBlur = () => {
+    if (!blur) setFx({ ...fx, blur: { ...DEFAULT_BLUR } })
+    else setFx({ ...fx, blur: { ...blur, enabled: !blur.enabled } })
+  }
+  const patchShadow = (patch: Partial<DropShadow>, live = false) => {
+    const next = { ...fx, shadow: { ...(shadow ?? DEFAULT_SHADOW), ...patch } }
+    live ? setFxLive(next) : setFx(next)
+  }
+  const patchBlur = (patch: Partial<BlurEffect>) => {
+    setFxLive({ ...fx, blur: { ...(blur ?? DEFAULT_BLUR), ...patch } })
+  }
+
+  const shadowActive = shadow?.enabled ?? false
+  const blurActive   = blur?.enabled   ?? false
+
+  return (
+    <div className="panel-section">
+      <div className="panel-label">Effects</div>
+
+      {/* ── Drop Shadow ── */}
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+          <button
+            onClick={toggleShadow}
+            style={{
+              width: 30, height: 16, borderRadius: 8, border: 'none', cursor: 'pointer', padding: 0,
+              background: shadowActive ? 'var(--accent)' : 'rgba(255,255,255,0.12)',
+              position: 'relative', transition: 'background 0.15s', flexShrink: 0,
+            }}
+          >
+            <span style={{
+              position: 'absolute', top: 2, left: shadowActive ? 16 : 2,
+              width: 12, height: 12, borderRadius: '50%', background: '#fff', transition: 'left 0.15s',
+            }} />
+          </button>
+          <span style={{ fontSize: 11, color: shadowActive ? 'var(--text)' : 'var(--text-dim)' }}>Drop Shadow</span>
+        </div>
+        {shadowActive && shadow && (
+          <div style={{ paddingLeft: 4 }}>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="panel-label" style={{ margin: 0, width: 48, flexShrink: 0 }}>Color</span>
+              <button
+                ref={shadowSwatchRef}
+                onClick={() => setShadowColorOpen((o) => !o)}
+                style={{
+                  width: 28, height: 22, borderRadius: 4, border: '1px solid var(--border)',
+                  background: shadow.color, cursor: 'pointer', flexShrink: 0,
+                }}
+              />
+              {shadowColorOpen && (
+                <ColorPicker
+                  value={shadow.color}
+                  onChange={(c) => patchShadow({ color: c }, true)}
+                  onCommit={() => { patchShadow({ color: shadow.color }); setShadowColorOpen(false) }}
+                  onClose={() => setShadowColorOpen(false)}
+                  anchorRef={shadowSwatchRef}
+                />
+              )}
+            </div>
+            <SliderRow label="Opacity" value={shadow.opacity} onChange={(v) => patchShadow({ opacity: v }, true)} />
+            <SliderRow label="Blur" value={shadow.blur} onChange={(v) => patchShadow({ blur: v }, true)} min={0} max={20} step={0.5} />
+            <SliderRow label="X" value={shadow.dx} onChange={(v) => patchShadow({ dx: v }, true)} min={-30} max={30} step={0.5} />
+            <SliderRow label="Y" value={shadow.dy} onChange={(v) => patchShadow({ dy: v }, true)} min={-30} max={30} step={0.5} />
+          </div>
+        )}
+      </div>
+
+      {/* ── Blur ── */}
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+          <button
+            onClick={toggleBlur}
+            style={{
+              width: 30, height: 16, borderRadius: 8, border: 'none', cursor: 'pointer', padding: 0,
+              background: blurActive ? 'var(--accent)' : 'rgba(255,255,255,0.12)',
+              position: 'relative', transition: 'background 0.15s', flexShrink: 0,
+            }}
+          >
+            <span style={{
+              position: 'absolute', top: 2, left: blurActive ? 16 : 2,
+              width: 12, height: 12, borderRadius: '50%', background: '#fff', transition: 'left 0.15s',
+            }} />
+          </button>
+          <span style={{ fontSize: 11, color: blurActive ? 'var(--text)' : 'var(--text-dim)' }}>Blur</span>
+        </div>
+        {blurActive && blur && (
+          <div style={{ paddingLeft: 4 }}>
+            <SliderRow label="Amount" value={blur.amount} onChange={(v) => patchBlur({ amount: v })} min={0} max={20} step={0.5} />
+          </div>
+        )}
       </div>
     </div>
   )
@@ -309,6 +441,9 @@ function ShapeProperties({ shape }: { shape: Shape }) {
         <div className="panel-label">Layer</div>
         <NumInput label="Opacity" value={shape.opacity} onChange={(v) => update({ opacity: Math.max(0, Math.min(1, v)) })} min={0} max={1} step={0.05} />
       </div>
+
+      {/* FX */}
+      <FXPanel shape={shape} />
 
       {/* Text content */}
       {shape.type === 'text' && (

@@ -12,6 +12,25 @@ export interface GradientFill {
   angle: number  // degrees, used for linear
 }
 
+export interface DropShadow {
+  enabled: boolean
+  dx: number       // x offset
+  dy: number       // y offset
+  blur: number     // std deviation
+  color: string    // hex
+  opacity: number  // 0–1
+}
+
+export interface BlurEffect {
+  enabled: boolean
+  amount: number   // std deviation
+}
+
+export interface ShapeFilters {
+  shadow?: DropShadow
+  blur?: BlurEffect
+}
+
 export type ToolType =
   | 'select'
   | 'rect'
@@ -42,6 +61,7 @@ export interface BaseShape {
   flipY?: boolean
   gradientFill?: GradientFill
   groupId?: string
+  filters?: ShapeFilters
 }
 
 export interface RectShape extends BaseShape {
