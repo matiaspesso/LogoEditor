@@ -178,6 +178,20 @@ export function SVGCanvas() {
       return
     }
 
+    // If shape is part of a group, auto-select all group members (unless shift-clicking)
+    const groupId = (clickedShape as any)?.groupId
+    if (!e.shiftKey && groupId) {
+      const groupMemberIds = shapes.filter((s) => (s as any).groupId === groupId).map((s) => s.id)
+      setSelectedIds(groupMemberIds)
+      const pt = toCanvas(e)
+      pointerDownRef.current = { svgX: pt.x, svgY: pt.y, pointerId: e.pointerId }
+      didMoveRef.current = false
+      dragShapesRef.current = shapes.filter((s) => groupMemberIds.includes(s.id))
+      ;(e.currentTarget as SVGElement).closest('svg')?.parentElement?.setPointerCapture(e.pointerId)
+      setDrag({ type: 'move', startX: pt.x, startY: pt.y, startShapes: JSON.parse(JSON.stringify(dragShapesRef.current)) })
+      return
+    }
+
     // Determine the final selection after this click
     const alreadySelected = selectedIds.includes(id)
     if (e.shiftKey) {
@@ -540,6 +554,15 @@ export function SVGCanvas() {
         useEditorStore.getState().selectedIds.forEach((id) => {
           useEditorStore.getState().reorderLayer(id, dir as any)
         })
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'g') {
+        e.preventDefault()
+        const { selectedIds: ids } = useEditorStore.getState()
+        if (e.shiftKey) {
+          if (ids.length > 0) useEditorStore.getState().ungroupShapes(ids)
+        } else {
+          if (ids.length > 1) useEditorStore.getState().groupShapes(ids)
+        }
       }
     }
     window.addEventListener('keydown', handler)

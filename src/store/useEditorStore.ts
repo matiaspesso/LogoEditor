@@ -83,6 +83,8 @@ interface EditorState {
   alignShapes: (type: 'left' | 'center-h' | 'right' | 'top' | 'center-v' | 'bottom' | 'distribute-h' | 'distribute-v') => void
   flipShapes: (ids: string[], axis: 'x' | 'y') => void
   booleanOp: (ids: string[], op: BooleanOpType) => void
+  groupShapes: (ids: string[]) => void
+  ungroupShapes: (ids: string[]) => void
   commit: () => void
   undo: () => void
   redo: () => void
@@ -313,12 +315,43 @@ export const useEditorStore = create<EditorState>()(
       get().commit()
     },
 
+    groupShapes: (ids) => {
+      if (ids.length < 2) return
+      const groupId = nanoid(8)
+      set((s) => {
+        ids.forEach((id) => {
+          const idx = s.shapes.findIndex((sh) => sh.id === id)
+          if (idx !== -1) (s.shapes[idx] as any).groupId = groupId
+        })
+      })
+      get().commit()
+    },
+
+    ungroupShapes: (ids) => {
+      set((s) => {
+        ids.forEach((id) => {
+          const idx = s.shapes.findIndex((sh) => sh.id === id)
+          if (idx !== -1) delete (s.shapes[idx] as any).groupId
+        })
+      })
+      get().commit()
+    },
+
     commit: () => {
-      const { shapes, layerOrder, past } = get()
+      const { shapes, layerOrder, past, backgroundColor, canvasSize } = get()
       set((s) => {
         s.past = [...past.slice(-99), { shapes: JSON.parse(JSON.stringify(shapes)), layerOrder: [...layerOrder] }]
         s.future = []
       })
+      // Auto-save to localStorage
+      try {
+        localStorage.setItem('iconforge-state', JSON.stringify({
+          shapes: JSON.parse(JSON.stringify(shapes)),
+          layerOrder: [...layerOrder],
+          backgroundColor,
+          canvasSize,
+        }))
+      } catch { /* storage quota exceeded or unavailable */ }
     },
 
     undo: () => {

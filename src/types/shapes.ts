@@ -41,6 +41,7 @@ export interface BaseShape {
   flipX?: boolean
   flipY?: boolean
   gradientFill?: GradientFill
+  groupId?: string
 }
 
 export interface RectShape extends BaseShape {

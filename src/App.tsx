@@ -8,12 +8,36 @@ import { ExportModal } from './components/ExportModal'
 import { useEditorStore } from './store/useEditorStore'
 
 export default function App() {
-  const { codePanelOpen, exportModalOpen, zoom, setZoom, panX, panY, setPan, layersPanelOpen, setLayersPanelOpen } = useEditorStore()
+  const { codePanelOpen, exportModalOpen, zoom, setZoom, panX, panY, setPan, layersPanelOpen, setLayersPanelOpen, canvasSize } = useEditorStore()
 
-  // Load a sample icon on first run
+  const fitView = () => {
+    const toolbarW = 52
+    const layersW = layersPanelOpen ? 180 : 0
+    const propsW = 220
+    const headerH = 40
+    const statusH = 24
+    const availW = window.innerWidth - toolbarW - layersW - propsW - 32
+    const availH = window.innerHeight - headerH - statusH - 32
+    const fitZoom = Math.min(availW / canvasSize.width, availH / canvasSize.height)
+    useEditorStore.getState().setZoom(Math.max(0.5, fitZoom))
+    useEditorStore.getState().setPan(0, 0)
+  }
+
+  // Load saved state or sample icon on first run
   useEffect(() => {
     const store = useEditorStore.getState()
     if (store.shapes.length === 0) {
+      try {
+        const saved = localStorage.getItem('iconforge-state')
+        if (saved) {
+          const { shapes, layerOrder, backgroundColor, canvasSize } = JSON.parse(saved)
+          store.loadShapes(shapes, layerOrder)
+          if (backgroundColor) store.setBackgroundColor(backgroundColor)
+          if (canvasSize) store.setCanvasSize(canvasSize)
+          return
+        }
+      } catch { /* corrupt data */ }
+      // Default sample
       store.loadShapes([
         { id: 'bg', type: 'rect', x: 0, y: 0, width: 64, height: 64, rx: 12, fill: '#6c3ac4', fillOpacity: 1, stroke: 'none', strokeWidth: 0, strokeDasharray: '', strokeLinecap: 'round', opacity: 1, rotation: 0, locked: false, visible: true, name: 'Background' },
         { id: 's1', type: 'polygon', cx: 32, cy: 32, size: 22, sides: 5, innerRadius: 0.45, isStar: true, fill: '#f5c842', fillOpacity: 1, stroke: 'none', strokeWidth: 0, strokeDasharray: '', strokeLinecap: 'round', opacity: 1, rotation: 0, locked: false, visible: true, name: 'Star' },
@@ -38,18 +62,31 @@ export default function App() {
     return () => window.removeEventListener('wheel', handler)
   }, [zoom, panX, panY])
 
-  // Reset pan on double-click middle of canvas (spacebar + click)
+  // Zoom keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       if (e.key === '0' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault()
         setPan(0, 0)
         useEditorStore.getState().setZoom(6)
       }
+      if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')) {
+        e.preventDefault()
+        useEditorStore.getState().setZoom(zoom * 1.25)
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === '-') {
+        e.preventDefault()
+        useEditorStore.getState().setZoom(zoom / 1.25)
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === '1') {
+        e.preventDefault()
+        fitView()
+      }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [setPan])
+  }, [zoom, setPan, layersPanelOpen, canvasSize])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
@@ -83,10 +120,18 @@ export default function App() {
           Layers
         </button>
         <button
-          onClick={() => { useEditorStore.getState().setZoom(6); useEditorStore.getState().setPan(0, 0) }}
+          onClick={fitView}
+          title="Fit canvas to view (Ctrl+1)"
           style={{ fontSize: 11, padding: '2px 8px', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-dim)', cursor: 'pointer' }}
         >
-          Reset view
+          Fit
+        </button>
+        <button
+          onClick={() => { useEditorStore.getState().setZoom(6); useEditorStore.getState().setPan(0, 0) }}
+          title="Reset zoom to 100% (Ctrl+0)"
+          style={{ fontSize: 11, padding: '2px 8px', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-dim)', cursor: 'pointer' }}
+        >
+          1:1
         </button>
       </header>
 
@@ -144,7 +189,7 @@ function StatusBarContent() {
         <span style={{ color: 'var(--accent)' }}>Selected: {selectedShapes.length}</span>
       )}
       <span>Zoom: {Math.round(zoom * 100 / 6)}%</span>
-      <span style={{ marginLeft: 'auto' }}>Ctrl+C copy · Ctrl+V paste · Ctrl+Z undo · Del delete · Ctrl+D duplicate · P pen · double-click to close path</span>
+      <span style={{ marginLeft: 'auto' }}>Ctrl+C/V copy/paste · Ctrl+Z undo · Del delete · Ctrl+D dup · Ctrl+G group · Ctrl+1 fit · Ctrl+±/ zoom</span>
     </>
   )
 }

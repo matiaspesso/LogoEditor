@@ -34,12 +34,14 @@ export function LayersPanel() {
           if (!shape) return null
           const isSelected = selectedIds.includes(id)
 
+          const groupId = (shape as any).groupId
+
           return (
             <div
               key={id}
               className={`layer-item ${isSelected ? 'selected' : ''}`}
               onClick={(e) => selectShape(id, e.shiftKey)}
-              style={{ opacity: shape.locked ? 0.6 : 1 }}
+              style={{ opacity: shape.locked ? 0.6 : 1, paddingLeft: groupId ? 12 : undefined }}
             >
               {/* Visibility toggle */}
               <button
@@ -69,6 +71,8 @@ export function LayersPanel() {
                 {shape.locked ? '🔒' : '🔓'}
               </button>
 
+              {/* Group indicator */}
+              {groupId && <span style={{ fontSize: 9, color: 'var(--accent)', opacity: 0.7, flexShrink: 0 }}>◈</span>}
               {/* Icon */}
               <span style={{ fontSize: 12, flexShrink: 0 }}>{shapeIcon(shape.type)}</span>
 

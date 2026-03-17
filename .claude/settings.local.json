@@ -10,7 +10,8 @@
       "Bash(node -e \"const pc = require\\(''./node_modules/polygon-clipping''\\); console.log\\(pc.default ? ''has default'' : ''no default'', typeof pc.union\\)\")",
       "Bash(ls node_modules/polygon-clipping/*.d.ts)",
       "Bash(ls node_modules/polygon-clipping/src/*.d.ts)",
-      "Bash(find node_modules/polygon-clipping -name *.d.ts)"
+      "Bash(find node_modules/polygon-clipping -name *.d.ts)",
+      "Bash(npx tsc:*)"
     ]
   }
 }
