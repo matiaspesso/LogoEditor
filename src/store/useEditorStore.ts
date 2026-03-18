@@ -85,6 +85,9 @@ interface EditorState {
   booleanOp: (ids: string[], op: BooleanOpType) => void
   groupShapes: (ids: string[]) => void
   ungroupShapes: (ids: string[]) => void
+  makeClipMask: (clipSourceId: string, clippedId: string) => void
+  releaseClipMask: (shapeId: string) => void
+  clearCanvas: () => void
   commit: () => void
   undo: () => void
   redo: () => void
@@ -335,6 +338,42 @@ export const useEditorStore = create<EditorState>()(
         })
       })
       get().commit()
+    },
+
+    makeClipMask: (clipSourceId, clippedId) => {
+      set((s) => {
+        const clipper = s.shapes.findIndex((sh) => sh.id === clipSourceId)
+        const clipped = s.shapes.findIndex((sh) => sh.id === clippedId)
+        if (clipper !== -1) (s.shapes[clipper] as any).isClipSource = true
+        if (clipped !== -1) (s.shapes[clipped] as any).clippedBy = clipSourceId
+      })
+      get().commit()
+    },
+
+    releaseClipMask: (shapeId) => {
+      set((s) => {
+        // shapeId can be either the clipSource or the clipped shape
+        const clipSource = s.shapes.find((sh) => sh.id === shapeId || (sh as any).clippedBy === shapeId)
+        const clipped = s.shapes.find((sh) => (sh as any).clippedBy === shapeId || (sh as any).clippedBy === shapeId)
+        s.shapes.forEach((sh) => {
+          if (sh.id === shapeId || (sh as any).clippedBy === shapeId) {
+            delete (sh as any).clippedBy
+            delete (sh as any).isClipSource
+          }
+        })
+        void clipSource; void clipped
+      })
+      get().commit()
+    },
+
+    clearCanvas: () => {
+      set((s) => {
+        s.shapes = []
+        s.layerOrder = []
+        s.selectedIds = []
+      })
+      get().commit()
+      try { localStorage.removeItem('iconforge-state') } catch { /* */ }
     },
 
     commit: () => {

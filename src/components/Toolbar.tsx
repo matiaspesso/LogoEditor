@@ -14,6 +14,7 @@ const TOOLS: { id: ToolType; label: string; icon: string; shortcut?: string }[] 
   { id: 'text', label: 'Text', icon: 'T', shortcut: 'T' },
   { id: 'polygon', label: 'Polygon', icon: '⬡', shortcut: 'G' },
   { id: 'star', label: 'Star', icon: '★', shortcut: 'S' },
+  { id: 'frame', label: 'Frame', icon: '⬜', shortcut: 'F' },
 ]
 
 export function Toolbar() {

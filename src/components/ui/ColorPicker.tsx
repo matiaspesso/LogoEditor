@@ -21,12 +21,18 @@ export function ColorPicker({ value, onChange, onCommit, onClose, anchorRef }: P
   const alphaRef = useRef<HTMLDivElement>(null)
   const dragging = useRef<null | 'sq' | 'hue' | 'alpha'>(null)
 
-  // Position the picker below the anchor
+  // Position the picker below the anchor, clamped to viewport
   const [pos, setPos] = useState({ top: 0, left: 0 })
   useEffect(() => {
     if (anchorRef.current) {
       const rect = anchorRef.current.getBoundingClientRect()
-      setPos({ top: rect.bottom + 4, left: rect.left })
+      const pickerW = 240
+      const margin = 8
+      const left = Math.min(rect.left, window.innerWidth - pickerW - margin)
+      const top = rect.bottom + 4 + pickerW > window.innerHeight
+        ? rect.top - pickerW - 4
+        : rect.bottom + 4
+      setPos({ top, left: Math.max(margin, left) })
     }
   }, [anchorRef])
 
@@ -254,6 +260,37 @@ export function ColorPicker({ value, onChange, onCommit, onClose, anchorRef }: P
           style={{ flex: 1, fontFamily: 'monospace', fontSize: 11 }}
           spellCheck={false}
         />
+        {'EyeDropper' in window && (
+          <button
+            title="Cuentagotas (pick color from screen)"
+            onClick={async () => {
+              try {
+                const dropper = new (window as any).EyeDropper()
+                const result = await dropper.open()
+                const hex = result.sRGBHex
+                const next = { ...hexToHsva(hex), a: hsva.a }
+                setHsva(next)
+                emit(next)
+                onCommit?.()
+              } catch {
+                // user cancelled
+              }
+            }}
+            style={{
+              width: 28, height: 28, borderRadius: 4, border: '1px solid var(--border)',
+              background: 'rgba(255,255,255,0.05)', cursor: 'pointer', fontSize: 14,
+              color: 'var(--text-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              flexShrink: 0,
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 2a3 3 0 0 1 3 3c0 1.5-1 2.5-1 4l-4-4c1.5 0 2.5-1 2.5-3z"/>
+              <path d="M9 9L3 15l3 3 6-6"/>
+              <path d="M14 8l2 2"/>
+              <circle cx="4.5" cy="19.5" r="1.5"/>
+            </svg>
+          </button>
+        )}
         <button
           title="No color"
           onClick={() => { onChange('none'); onClose() }}
@@ -261,6 +298,7 @@ export function ColorPicker({ value, onChange, onCommit, onClose, anchorRef }: P
             width: 28, height: 28, borderRadius: 4, border: '1px solid var(--border)',
             background: 'rgba(255,255,255,0.05)', cursor: 'pointer', fontSize: 14,
             color: 'var(--text-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexShrink: 0,
           }}
         >∅</button>
       </div>

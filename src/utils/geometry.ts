@@ -3,6 +3,7 @@ import type { Shape, BBox } from '../types/shapes'
 export function getShapeBBox(shape: Shape): BBox {
   switch (shape.type) {
     case 'rect':
+    case 'frame':
       return { x: shape.x, y: shape.y, width: shape.width, height: shape.height }
     case 'circle':
       return { x: shape.cx - shape.r, y: shape.cy - shape.r, width: shape.r * 2, height: shape.r * 2 }
@@ -70,9 +71,31 @@ export function svgPointFromEvent(
   return { x: svgP.x, y: svgP.y }
 }
 
+/** Builds an SVG transform attribute string (same logic used in canvas & serializer). */
+export function buildShapeTransform(shape: Shape): string {
+  const transforms: string[] = []
+  const bbox = getShapeBBox(shape)
+  const cx = bbox.x + bbox.width / 2
+  const cy = bbox.y + bbox.height / 2
+  if (shape.rotation) transforms.push(`rotate(${shape.rotation} ${cx} ${cy})`)
+  if (shape.flipX) transforms.push(`translate(${cx} 0) scale(-1 1) translate(${-cx} 0)`)
+  if (shape.flipY) transforms.push(`translate(0 ${cy}) scale(1 -1) translate(0 ${-cy})`)
+  const skewX = (shape as any).skewX ?? 0
+  const skewY = (shape as any).skewY ?? 0
+  if (skewX || skewY) {
+    const parts = [`translate(${cx} ${cy})`]
+    if (skewX) parts.push(`skewX(${skewX})`)
+    if (skewY) parts.push(`skewY(${skewY})`)
+    parts.push(`translate(${-cx} ${-cy})`)
+    transforms.push(parts.join(' '))
+  }
+  return transforms.join(' ')
+}
+
 export function moveShape(shape: Shape, dx: number, dy: number): Partial<Shape> {
   switch (shape.type) {
-    case 'rect': return { x: shape.x + dx, y: shape.y + dy }
+    case 'rect':
+    case 'frame': return { x: shape.x + dx, y: shape.y + dy }
     case 'circle': return { cx: shape.cx + dx, cy: shape.cy + dy }
     case 'ellipse': return { cx: shape.cx + dx, cy: shape.cy + dy }
     case 'line': return { x1: shape.x1 + dx, y1: shape.y1 + dy, x2: shape.x2 + dx, y2: shape.y2 + dy }

@@ -1,6 +1,6 @@
-import type { Shape, GradientFill } from '../types/shapes'
+import type { Shape, GradientFill, PatternFill } from '../types/shapes'
 import type { CanvasSize } from '../store/useEditorStore'
-import { polygonPoints, getShapeBBox } from './geometry'
+import { polygonPoints, buildShapeTransform } from './geometry'
 
 function gradientDefString(shape: Shape): string {
   const gf = shape.gradientFill
@@ -21,34 +21,142 @@ function gradientDefString(shape: Shape): string {
   return `<radialGradient id="${id}" cx="50%" cy="50%" r="50%" gradientUnits="objectBoundingBox">${stops}</radialGradient>`
 }
 
-function getShapeCenter(shape: Shape): { cx: number; cy: number } {
-  const bbox = getShapeBBox(shape)
-  return { cx: bbox.x + bbox.width / 2, cy: bbox.y + bbox.height / 2 }
+function patternDefString(shape: Shape): string {
+  const pf: PatternFill | undefined = shape.patternFill
+  if (!pf) return ''
+  const pid = `pat-${shape.id}`
+  const { type, color, size, angle } = pf
+  const lw = Math.max(0.5, size * 0.1)
+  const transform = angle ? ` patternTransform="rotate(${angle})"` : ''
+  let content = ''
+  switch (type) {
+    case 'stripes':
+      content = `<line x1="${size / 2}" y1="0" x2="${size / 2}" y2="${size}" stroke="${color}" stroke-width="${size * 0.4}"/>`
+      break
+    case 'dots':
+      content = `<circle cx="${size / 2}" cy="${size / 2}" r="${size * 0.22}" fill="${color}"/>`
+      break
+    case 'grid':
+      content = `<path d="M ${size} 0 L 0 0 0 ${size}" fill="none" stroke="${color}" stroke-width="${lw}"/>`
+      break
+    case 'crosshatch':
+      content = `<line x1="0" y1="0" x2="${size}" y2="${size}" stroke="${color}" stroke-width="${lw}"/><line x1="${size}" y1="0" x2="0" y2="${size}" stroke="${color}" stroke-width="${lw}"/>`
+      break
+    default:
+      return ''
+  }
+  return `<pattern id="${pid}" patternUnits="userSpaceOnUse" width="${size}" height="${size}"${transform}>${content}</pattern>`
 }
 
-function buildTransform(shape: Shape): string {
-  const transforms: string[] = []
-  if (shape.rotation) {
-    const { cx, cy } = getShapeCenter(shape)
-    transforms.push(`rotate(${shape.rotation} ${cx} ${cy})`)
+function filterDefString(shape: Shape): string {
+  const f = shape.filters
+  if (!f) return ''
+  const shadow = f.shadow?.enabled ? f.shadow : null
+  const blur = f.blur?.enabled ? f.blur : null
+  const innerShadow = f.innerShadow?.enabled ? f.innerShadow : null
+  const glow = f.glow?.enabled ? f.glow : null
+  if (!shadow && !blur && !innerShadow && !glow) return ''
+
+  const fid = `fx-${shape.id}`
+  const parts: string[] = []
+  const mergeInputs: string[] = []
+
+  if (blur) {
+    parts.push(`<feGaussianBlur in="SourceGraphic" stdDeviation="${blur.amount}" result="blurred"/>`)
   }
-  if (shape.flipX) {
-    const { cx } = getShapeCenter(shape)
-    transforms.push(`translate(${cx} 0) scale(-1 1) translate(${-cx} 0)`)
+  const src = blur ? 'blurred' : 'SourceGraphic'
+
+  if (glow) {
+    parts.push(
+      `<feGaussianBlur in="SourceAlpha" stdDeviation="${glow.blur}" result="gblu"/>`,
+      `<feFlood flood-color="${glow.color}" flood-opacity="${glow.opacity}" result="gcol"/>`,
+      `<feComposite in="gcol" in2="gblu" operator="in" result="gout"/>`,
+    )
+    mergeInputs.push('gout')
   }
-  if (shape.flipY) {
-    const { cy } = getShapeCenter(shape)
-    transforms.push(`translate(0 ${cy}) scale(1 -1) translate(0 ${-cy})`)
+  if (shadow) {
+    parts.push(
+      `<feGaussianBlur in="SourceAlpha" stdDeviation="${shadow.blur}" result="sblu"/>`,
+      `<feOffset in="sblu" dx="${shadow.dx}" dy="${shadow.dy}" result="soff"/>`,
+      `<feFlood flood-color="${shadow.color}" flood-opacity="${shadow.opacity}" result="scol"/>`,
+      `<feComposite in="scol" in2="soff" operator="in" result="sout"/>`,
+    )
+    mergeInputs.push('sout')
   }
-  return transforms.length ? transforms.join(' ') : ''
+  mergeInputs.push(src)
+  if (innerShadow) {
+    parts.push(
+      `<feGaussianBlur in="SourceAlpha" stdDeviation="${innerShadow.blur}" result="iblu"/>`,
+      `<feOffset in="iblu" dx="${innerShadow.dx}" dy="${innerShadow.dy}" result="ioff"/>`,
+      `<feFlood flood-color="${innerShadow.color}" flood-opacity="${innerShadow.opacity}" result="icol"/>`,
+      `<feComposite in="icol" in2="ioff" operator="in" result="ic1"/>`,
+      `<feComposite in="ic1" in2="SourceAlpha" operator="in" result="iout"/>`,
+    )
+    mergeInputs.push('iout')
+  }
+
+  const mergeNodes = mergeInputs.map((inp) => `<feMergeNode in="${inp}"/>`).join('')
+  const region = `x="-60%" y="-60%" width="220%" height="220%"`
+  return `<filter id="${fid}" ${region}>${parts.join('')}<feMerge>${mergeNodes}</feMerge></filter>`
 }
 
-function shapeToSVGElement(shape: Shape): string {
-  const fillAttr = shape.gradientFill
-    ? `url(#grad-${shape.id})`
-    : shape.fill !== 'none' ? shape.fill : 'none'
+function markerDefString(shape: Shape): string {
+  if (shape.type !== 'line' && shape.type !== 'path') return ''
+  const ms = shape.markerStart
+  const me = shape.markerEnd
+  if ((!ms || ms === 'none') && (!me || me === 'none')) return ''
+  const fill = shape.stroke !== 'none' ? shape.stroke : '#000'
 
-  const transform = buildTransform(shape)
+  function mk(id: string, type: string, isStart: boolean): string {
+    if (!type || type === 'none') return ''
+    const orient = isStart ? 'auto-start-reverse' : 'auto'
+    if (type === 'arrow')
+      return `<marker id="${id}" markerWidth="8" markerHeight="6" refX="4" refY="3" orient="${orient}" markerUnits="strokeWidth"><path d="M 0 0 L 8 3 L 0 6 Z" fill="${fill}"/></marker>`
+    if (type === 'dot')
+      return `<marker id="${id}" markerWidth="5" markerHeight="5" refX="2.5" refY="2.5" orient="${orient}" markerUnits="strokeWidth"><circle cx="2.5" cy="2.5" r="2.5" fill="${fill}"/></marker>`
+    if (type === 'diamond')
+      return `<marker id="${id}" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="${orient}" markerUnits="strokeWidth"><path d="M 0 4 L 4 0 L 8 4 L 4 8 Z" fill="${fill}"/></marker>`
+    return ''
+  }
+
+  const sm = ms && ms !== 'none' ? mk(`mk-s-${shape.id}`, ms, true) : ''
+  const em = me && me !== 'none' ? mk(`mk-e-${shape.id}`, me, false) : ''
+  return sm + em
+}
+
+
+function shapeGeometryString(shape: Shape): string {
+  switch (shape.type) {
+    case 'rect':
+    case 'frame':
+      return `<rect x="${shape.x}" y="${shape.y}" width="${shape.width}" height="${shape.height}"${(shape as any).rx ? ` rx="${(shape as any).rx}"` : ''}/>`
+    case 'circle': return `<circle cx="${shape.cx}" cy="${shape.cy}" r="${shape.r}"/>`
+    case 'ellipse': return `<ellipse cx="${shape.cx}" cy="${shape.cy}" rx="${shape.rx}" ry="${shape.ry}"/>`
+    case 'path': return `<path d="${shape.d}"/>`
+    case 'polygon': {
+      const pts = polygonPoints(shape.cx, shape.cy, shape.size, shape.sides, shape.innerRadius, shape.isStar)
+      return `<polygon points="${pts}"/>`
+    }
+    default: return ''
+  }
+}
+
+function shapeToSVGElement(shape: Shape, allShapes?: Shape[]): string {
+  if (shape.isClipSource) return ''  // rendered inside <clipPath> only
+
+  const fillAttr = shape.patternFill
+    ? `url(#pat-${shape.id})`
+    : shape.gradientFill
+      ? `url(#grad-${shape.id})`
+      : shape.fill !== 'none' ? shape.fill : 'none'
+
+  const clipAttr = shape.clippedBy ? ` clip-path="url(#clip-${shape.id})"` : ''
+  const transform = buildShapeTransform(shape)
+
+  const markerStartAttr = (shape.type === 'line' || shape.type === 'path') && shape.markerStart && shape.markerStart !== 'none'
+    ? ` marker-start="url(#mk-s-${shape.id})"` : ''
+  const markerEndAttr = (shape.type === 'line' || shape.type === 'path') && shape.markerEnd && shape.markerEnd !== 'none'
+    ? ` marker-end="url(#mk-e-${shape.id})"` : ''
 
   const base = [
     `fill="${fillAttr}"`,
@@ -57,26 +165,46 @@ function shapeToSVGElement(shape: Shape): string {
     shape.strokeWidth > 0 ? `stroke-width="${shape.strokeWidth}"` : '',
     shape.strokeDasharray ? `stroke-dasharray="${shape.strokeDasharray}"` : '',
     shape.strokeLinecap && shape.strokeLinecap !== 'butt' ? `stroke-linecap="${shape.strokeLinecap}"` : '',
+    shape.strokeLinejoin && shape.strokeLinejoin !== 'miter' ? `stroke-linejoin="${shape.strokeLinejoin}"` : '',
     shape.opacity !== 1 ? `opacity="${shape.opacity}"` : '',
+    shape.filters && (shape.filters.shadow?.enabled || shape.filters.blur?.enabled || shape.filters.innerShadow?.enabled || shape.filters.glow?.enabled)
+      ? `filter="url(#fx-${shape.id})"` : '',
     transform ? `transform="${transform}"` : '',
   ].filter(Boolean).join(' ')
 
   switch (shape.type) {
     case 'rect':
-      return `<rect x="${shape.x}" y="${shape.y}" width="${shape.width}" height="${shape.height}"${shape.rx ? ` rx="${shape.rx}"` : ''} ${base}/>`
+    case 'frame':
+      return `<rect x="${shape.x}" y="${shape.y}" width="${shape.width}" height="${shape.height}"${(shape as any).rx ? ` rx="${(shape as any).rx}"` : ''} ${base}${clipAttr}/>`
     case 'circle':
-      return `<circle cx="${shape.cx}" cy="${shape.cy}" r="${shape.r}" ${base}/>`
+      return `<circle cx="${shape.cx}" cy="${shape.cy}" r="${shape.r}" ${base}${clipAttr}/>`
     case 'ellipse':
-      return `<ellipse cx="${shape.cx}" cy="${shape.cy}" rx="${shape.rx}" ry="${shape.ry}" ${base}/>`
+      return `<ellipse cx="${shape.cx}" cy="${shape.cy}" rx="${shape.rx}" ry="${shape.ry}" ${base}${clipAttr}/>`
     case 'line':
-      return `<line x1="${shape.x1}" y1="${shape.y1}" x2="${shape.x2}" y2="${shape.y2}" ${base}/>`
+      return `<line x1="${shape.x1}" y1="${shape.y1}" x2="${shape.x2}" y2="${shape.y2}" ${base}${markerStartAttr}${markerEndAttr}/>`
     case 'path':
-      return `<path d="${shape.d}" ${base}/>`
-    case 'text':
-      return `<text x="${shape.x}" y="${shape.y}" font-size="${shape.fontSize}" font-family="${shape.fontFamily}" font-weight="${shape.fontWeight}" text-anchor="${shape.textAnchor}" ${base}>${shape.text}</text>`
+      return `<path d="${shape.d}" ${base}${clipAttr}${markerStartAttr}${markerEndAttr}/>`
+    case 'text': {
+      const ls = (shape as any).letterSpacing
+      const lsAttr = ls ? ` letter-spacing="${ls}"` : ''
+      if (shape.textOnArc) {
+        const arcId = `arcpath-${shape.id}`
+        const offset = shape.arcOffset ?? 50
+        return `<text font-size="${shape.fontSize}" font-family="${shape.fontFamily}" font-weight="${shape.fontWeight}"${lsAttr} ${base}${clipAttr}><textPath href="#${arcId}" startOffset="${offset}%" textAnchor="middle">${shape.text}</textPath></text>`
+      }
+      const charOffsets: number[] | undefined = (shape as any).charOffsets
+      if (charOffsets && charOffsets.some((v: number) => v !== 0)) {
+        const tspans = shape.text.split('').map((ch: string, i: number) => {
+          const dx = i === 0 ? (charOffsets[0] ?? 0) : (charOffsets[i] ?? 0) - (charOffsets[i - 1] ?? 0)
+          return dx !== 0 ? `<tspan dx="${dx}">${ch}</tspan>` : `<tspan>${ch}</tspan>`
+        }).join('')
+        return `<text x="${shape.x}" y="${shape.y}" font-size="${shape.fontSize}" font-family="${shape.fontFamily}" font-weight="${shape.fontWeight}" text-anchor="${shape.textAnchor}"${lsAttr} ${base}${clipAttr}>${tspans}</text>`
+      }
+      return `<text x="${shape.x}" y="${shape.y}" font-size="${shape.fontSize}" font-family="${shape.fontFamily}" font-weight="${shape.fontWeight}" text-anchor="${shape.textAnchor}"${lsAttr} ${base}${clipAttr}>${shape.text}</text>`
+    }
     case 'polygon': {
       const pts = polygonPoints(shape.cx, shape.cy, shape.size, shape.sides, shape.innerRadius, shape.isStar)
-      return `<polygon points="${pts}" ${base}/>`
+      return `<polygon points="${pts}" ${base}${clipAttr}/>`
     }
     default:
       return ''
@@ -98,15 +226,54 @@ export function serializeSVG(
       ? `  <rect width="${canvasSize.width}" height="${canvasSize.height}" fill="${backgroundColor}"/>\n`
       : ''
 
-  // Collect gradient defs
+  // Collect all defs
   const gradDefs = orderedShapes
     .filter((s) => s.gradientFill)
     .map((s) => `    ${gradientDefString(s)}`)
     .join('\n')
 
-  const defsBlock = gradDefs ? `  <defs>\n${gradDefs}\n  </defs>\n` : ''
+  const patternDefs = orderedShapes
+    .filter((s) => s.patternFill)
+    .map((s) => `    ${patternDefString(s)}`)
+    .join('\n')
 
-  const elements = orderedShapes.map((s) => `  ${shapeToSVGElement(s)}`).join('\n')
+  const filterDefs = orderedShapes
+    .filter((s) => s.filters && (s.filters.shadow?.enabled || s.filters.blur?.enabled || s.filters.innerShadow?.enabled || s.filters.glow?.enabled))
+    .map((s) => `    ${filterDefString(s)}`)
+    .join('\n')
+
+  const markerDefs = orderedShapes
+    .filter((s) => (s.type === 'line' || s.type === 'path') && (s.markerStart || s.markerEnd))
+    .map((s) => `    ${markerDefString(s)}`)
+    .join('\n')
+
+  const clipDefs = orderedShapes
+    .filter((s) => s.clippedBy)
+    .map((s) => {
+      const clipSrc = shapes.find((sh) => sh.id === s.clippedBy)
+      if (!clipSrc) return ''
+      return `    <clipPath id="clip-${s.id}">${shapeGeometryString(clipSrc)}</clipPath>`
+    })
+    .filter(Boolean)
+    .join('\n')
+
+  // Arc text path defs — must be in main defs so textPath hrefs resolve correctly
+  const arcPathDefs = orderedShapes
+    .filter((s) => s.type === 'text' && (s as any).textOnArc)
+    .map((s) => {
+      const shape = s as any
+      const r = shape.arcRadius ?? shape.fontSize * 3
+      const cx = shape.x, cy = shape.y
+      const sweep = shape.arcDirection === 'down' ? 1 : 0
+      const arcD = `M ${cx - r},${cy} A ${r},${r} 0 1,${sweep} ${cx + r},${cy}`
+      return `    <path id="arcpath-${shape.id}" d="${arcD}"/>`
+    })
+    .join('\n')
+
+  const allDefs = [gradDefs, patternDefs, filterDefs, markerDefs, clipDefs, arcPathDefs].filter(Boolean).join('\n')
+  const defsBlock = allDefs ? `  <defs>\n${allDefs}\n  </defs>\n` : ''
+
+  const elements = orderedShapes.map((s) => `  ${shapeToSVGElement(s, shapes)}`).filter((s) => s.trim()).join('\n')
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${canvasSize.width} ${canvasSize.height}" width="${canvasSize.width}" height="${canvasSize.height}">\n${defsBlock}${bg}${elements}\n</svg>`
 }

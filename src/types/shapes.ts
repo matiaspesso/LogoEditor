@@ -1,4 +1,4 @@
-export type ShapeType = 'rect' | 'circle' | 'ellipse' | 'line' | 'path' | 'text' | 'polygon'
+export type ShapeType = 'rect' | 'circle' | 'ellipse' | 'line' | 'path' | 'text' | 'polygon' | 'frame'
 
 export interface GradientStop {
   offset: number  // 0–1
@@ -14,21 +14,46 @@ export interface GradientFill {
 
 export interface DropShadow {
   enabled: boolean
-  dx: number       // x offset
-  dy: number       // y offset
-  blur: number     // std deviation
-  color: string    // hex
-  opacity: number  // 0–1
+  dx: number
+  dy: number
+  blur: number
+  color: string
+  opacity: number
+}
+
+export interface InnerShadow {
+  enabled: boolean
+  dx: number
+  dy: number
+  blur: number
+  color: string
+  opacity: number
+}
+
+export interface GlowEffect {
+  enabled: boolean
+  blur: number
+  color: string
+  opacity: number
 }
 
 export interface BlurEffect {
   enabled: boolean
-  amount: number   // std deviation
+  amount: number
+}
+
+export interface PatternFill {
+  type: 'stripes' | 'dots' | 'grid' | 'crosshatch'
+  color: string
+  size: number    // pattern cell size in SVG units
+  angle: number   // rotation in degrees
 }
 
 export interface ShapeFilters {
   shadow?: DropShadow
   blur?: BlurEffect
+  innerShadow?: InnerShadow
+  glow?: GlowEffect
 }
 
 export type ToolType =
@@ -41,7 +66,34 @@ export type ToolType =
   | 'text'
   | 'polygon'
   | 'star'
+  | 'frame'
   | 'pan'
+
+// Group registry for nested groups
+export interface GroupDef {
+  id: string
+  name: string
+  parentGroupId?: string
+  collapsed?: boolean
+}
+
+// Reusable symbol definition
+export interface SymbolDef {
+  id: string
+  name: string
+  shapes: Shape[]
+  layerOrder: string[]
+}
+
+// Artboard
+export interface Artboard {
+  id: string
+  name: string
+  x: number
+  y: number
+  width: number
+  height: number
+}
 
 export interface BaseShape {
   id: string
@@ -50,8 +102,12 @@ export interface BaseShape {
   fillOpacity: number
   stroke: string
   strokeWidth: number
-  strokeDasharray: string  // e.g. '' | '4 4' | '2 4' | '8 4 2 4'
+  strokeDasharray: string
   strokeLinecap: 'butt' | 'round' | 'square'
+  strokeLinejoin?: 'miter' | 'round' | 'bevel'
+  markerStart?: 'none' | 'arrow' | 'dot' | 'diamond'
+  markerEnd?: 'none' | 'arrow' | 'dot' | 'diamond'
+  patternFill?: PatternFill
   opacity: number
   rotation: number
   locked: boolean
@@ -62,6 +118,10 @@ export interface BaseShape {
   gradientFill?: GradientFill
   groupId?: string
   filters?: ShapeFilters
+  clippedBy?: string
+  isClipSource?: boolean
+  skewX?: number
+  skewY?: number
 }
 
 export interface RectShape extends BaseShape {
@@ -110,6 +170,12 @@ export interface TextShape extends BaseShape {
   fontFamily: string
   fontWeight: string
   textAnchor: 'start' | 'middle' | 'end'
+  letterSpacing?: number
+  charOffsets?: number[]   // per-character cumulative x offset (index i = how far char i is from its natural position)
+  textOnArc?: boolean
+  arcRadius?: number
+  arcDirection?: 'up' | 'down'
+  arcOffset?: number
 }
 
 export interface PolygonShape extends BaseShape {
@@ -118,8 +184,16 @@ export interface PolygonShape extends BaseShape {
   cy: number
   size: number
   sides: number
-  innerRadius: number // 0 = regular polygon, 0-1 = star ratio
+  innerRadius: number
   isStar: boolean
+}
+
+export interface FrameShape extends BaseShape {
+  type: 'frame'
+  x: number
+  y: number
+  width: number
+  height: number
 }
 
 export type Shape =
@@ -130,6 +204,7 @@ export type Shape =
   | PathShape
   | TextShape
   | PolygonShape
+  | FrameShape
 
 export interface BBox {
   x: number

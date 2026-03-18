@@ -94,6 +94,12 @@ body {
   border-color: var(--accent);
 }
 
+.input-field option,
+.input-field optgroup {
+  background: #1e2a45;
+  color: #eee;
+}
+
 .icon-btn {
   display: flex;
   align-items: center;

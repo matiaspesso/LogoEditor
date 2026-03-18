@@ -1,10 +1,11 @@
 import React, { useState, useRef } from 'react'
 import { useEditorStore } from '../store/useEditorStore'
-import type { Shape, DropShadow, BlurEffect, ShapeFilters } from '../types/shapes'
+import type { Shape, DropShadow, BlurEffect, InnerShadow, GlowEffect, ShapeFilters, TextShape, PatternFill } from '../types/shapes'
 import { ColorPicker } from './ui/ColorPicker'
 import { AlignBar } from './ui/AlignBar'
 import { GradientEditor } from './ui/GradientEditor'
 import { importSVGString } from '../utils/svgImporter'
+import { textToPath } from '../utils/textToPath'
 
 const DASH_PRESETS = [
   { label: 'Solid',   value: '' },
@@ -119,15 +120,44 @@ function SliderRow({ label, value, onChange, min = 0, max = 1, step = 0.01 }: {
 
 const DEFAULT_SHADOW: DropShadow = { enabled: true, dx: 2, dy: 2, blur: 3, color: '#000000', opacity: 0.5 }
 const DEFAULT_BLUR: BlurEffect   = { enabled: true, amount: 2 }
+const DEFAULT_INNER_SHADOW: InnerShadow = { enabled: true, dx: 2, dy: 2, blur: 3, color: '#000000', opacity: 0.6 }
+const DEFAULT_GLOW: GlowEffect = { enabled: true, blur: 6, color: '#ffffff', opacity: 0.8 }
+
+function ToggleRow({ label, active, onToggle }: { label: string; active: boolean; onToggle: () => void }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+      <button
+        onClick={onToggle}
+        style={{
+          width: 30, height: 16, borderRadius: 8, border: 'none', cursor: 'pointer', padding: 0,
+          background: active ? 'var(--accent)' : 'rgba(255,255,255,0.12)',
+          position: 'relative', transition: 'background 0.15s', flexShrink: 0,
+        }}
+      >
+        <span style={{
+          position: 'absolute', top: 2, left: active ? 16 : 2,
+          width: 12, height: 12, borderRadius: '50%', background: '#fff', transition: 'left 0.15s',
+        }} />
+      </button>
+      <span style={{ fontSize: 11, color: active ? 'var(--text)' : 'var(--text-dim)' }}>{label}</span>
+    </div>
+  )
+}
 
 function FXPanel({ shape }: { shape: Shape }) {
   const { updateShape, commit } = useEditorStore()
   const [shadowColorOpen, setShadowColorOpen] = useState(false)
+  const [innerShadowColorOpen, setInnerShadowColorOpen] = useState(false)
+  const [glowColorOpen, setGlowColorOpen] = useState(false)
   const shadowSwatchRef = useRef<HTMLButtonElement>(null)
+  const innerShadowSwatchRef = useRef<HTMLButtonElement>(null)
+  const glowSwatchRef = useRef<HTMLButtonElement>(null)
 
   const fx: ShapeFilters = shape.filters ?? {}
   const shadow = fx.shadow
-  const blur   = fx.blur
+  const blur = fx.blur
+  const innerShadow = fx.innerShadow
+  const glow = fx.glow
 
   const setFx = (next: ShapeFilters) => { updateShape(shape.id, { filters: next } as any); commit() }
   const setFxLive = (next: ShapeFilters) => updateShape(shape.id, { filters: next } as any)
@@ -140,6 +170,15 @@ function FXPanel({ shape }: { shape: Shape }) {
     if (!blur) setFx({ ...fx, blur: { ...DEFAULT_BLUR } })
     else setFx({ ...fx, blur: { ...blur, enabled: !blur.enabled } })
   }
+  const toggleInnerShadow = () => {
+    if (!innerShadow) setFx({ ...fx, innerShadow: { ...DEFAULT_INNER_SHADOW } })
+    else setFx({ ...fx, innerShadow: { ...innerShadow, enabled: !innerShadow.enabled } })
+  }
+  const toggleGlow = () => {
+    if (!glow) setFx({ ...fx, glow: { ...DEFAULT_GLOW } })
+    else setFx({ ...fx, glow: { ...glow, enabled: !glow.enabled } })
+  }
+
   const patchShadow = (patch: Partial<DropShadow>, live = false) => {
     const next = { ...fx, shadow: { ...(shadow ?? DEFAULT_SHADOW), ...patch } }
     live ? setFxLive(next) : setFx(next)
@@ -147,9 +186,19 @@ function FXPanel({ shape }: { shape: Shape }) {
   const patchBlur = (patch: Partial<BlurEffect>) => {
     setFxLive({ ...fx, blur: { ...(blur ?? DEFAULT_BLUR), ...patch } })
   }
+  const patchInnerShadow = (patch: Partial<InnerShadow>, live = false) => {
+    const next = { ...fx, innerShadow: { ...(innerShadow ?? DEFAULT_INNER_SHADOW), ...patch } }
+    live ? setFxLive(next) : setFx(next)
+  }
+  const patchGlow = (patch: Partial<GlowEffect>, live = false) => {
+    const next = { ...fx, glow: { ...(glow ?? DEFAULT_GLOW), ...patch } }
+    live ? setFxLive(next) : setFx(next)
+  }
 
   const shadowActive = shadow?.enabled ?? false
-  const blurActive   = blur?.enabled   ?? false
+  const blurActive = blur?.enabled ?? false
+  const innerShadowActive = innerShadow?.enabled ?? false
+  const glowActive = glow?.enabled ?? false
 
   return (
     <div className="panel-section">
@@ -157,22 +206,7 @@ function FXPanel({ shape }: { shape: Shape }) {
 
       {/* ── Drop Shadow ── */}
       <div style={{ marginBottom: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-          <button
-            onClick={toggleShadow}
-            style={{
-              width: 30, height: 16, borderRadius: 8, border: 'none', cursor: 'pointer', padding: 0,
-              background: shadowActive ? 'var(--accent)' : 'rgba(255,255,255,0.12)',
-              position: 'relative', transition: 'background 0.15s', flexShrink: 0,
-            }}
-          >
-            <span style={{
-              position: 'absolute', top: 2, left: shadowActive ? 16 : 2,
-              width: 12, height: 12, borderRadius: '50%', background: '#fff', transition: 'left 0.15s',
-            }} />
-          </button>
-          <span style={{ fontSize: 11, color: shadowActive ? 'var(--text)' : 'var(--text-dim)' }}>Drop Shadow</span>
-        </div>
+        <ToggleRow label="Drop Shadow" active={shadowActive} onToggle={toggleShadow} />
         {shadowActive && shadow && (
           <div style={{ paddingLeft: 4 }}>
             <div className="flex items-center gap-2 mb-1">
@@ -180,19 +214,12 @@ function FXPanel({ shape }: { shape: Shape }) {
               <button
                 ref={shadowSwatchRef}
                 onClick={() => setShadowColorOpen((o) => !o)}
-                style={{
-                  width: 28, height: 22, borderRadius: 4, border: '1px solid var(--border)',
-                  background: shadow.color, cursor: 'pointer', flexShrink: 0,
-                }}
+                style={{ width: 28, height: 22, borderRadius: 4, border: '1px solid var(--border)', background: shadow.color, cursor: 'pointer', flexShrink: 0 }}
               />
               {shadowColorOpen && (
-                <ColorPicker
-                  value={shadow.color}
-                  onChange={(c) => patchShadow({ color: c }, true)}
+                <ColorPicker value={shadow.color} onChange={(c) => patchShadow({ color: c }, true)}
                   onCommit={() => { patchShadow({ color: shadow.color }); setShadowColorOpen(false) }}
-                  onClose={() => setShadowColorOpen(false)}
-                  anchorRef={shadowSwatchRef}
-                />
+                  onClose={() => setShadowColorOpen(false)} anchorRef={shadowSwatchRef} />
               )}
             </div>
             <SliderRow label="Opacity" value={shadow.opacity} onChange={(v) => patchShadow({ opacity: v }, true)} />
@@ -203,24 +230,59 @@ function FXPanel({ shape }: { shape: Shape }) {
         )}
       </div>
 
+      {/* ── Inner Shadow ── */}
+      <div style={{ marginBottom: 8 }}>
+        <ToggleRow label="Inner Shadow" active={innerShadowActive} onToggle={toggleInnerShadow} />
+        {innerShadowActive && innerShadow && (
+          <div style={{ paddingLeft: 4 }}>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="panel-label" style={{ margin: 0, width: 48, flexShrink: 0 }}>Color</span>
+              <button
+                ref={innerShadowSwatchRef}
+                onClick={() => setInnerShadowColorOpen((o) => !o)}
+                style={{ width: 28, height: 22, borderRadius: 4, border: '1px solid var(--border)', background: innerShadow.color, cursor: 'pointer', flexShrink: 0 }}
+              />
+              {innerShadowColorOpen && (
+                <ColorPicker value={innerShadow.color} onChange={(c) => patchInnerShadow({ color: c }, true)}
+                  onCommit={() => { patchInnerShadow({ color: innerShadow.color }); setInnerShadowColorOpen(false) }}
+                  onClose={() => setInnerShadowColorOpen(false)} anchorRef={innerShadowSwatchRef} />
+              )}
+            </div>
+            <SliderRow label="Opacity" value={innerShadow.opacity} onChange={(v) => patchInnerShadow({ opacity: v }, true)} />
+            <SliderRow label="Blur" value={innerShadow.blur} onChange={(v) => patchInnerShadow({ blur: v }, true)} min={0} max={20} step={0.5} />
+            <SliderRow label="X" value={innerShadow.dx} onChange={(v) => patchInnerShadow({ dx: v }, true)} min={-30} max={30} step={0.5} />
+            <SliderRow label="Y" value={innerShadow.dy} onChange={(v) => patchInnerShadow({ dy: v }, true)} min={-30} max={30} step={0.5} />
+          </div>
+        )}
+      </div>
+
+      {/* ── Glow ── */}
+      <div style={{ marginBottom: 8 }}>
+        <ToggleRow label="Glow" active={glowActive} onToggle={toggleGlow} />
+        {glowActive && glow && (
+          <div style={{ paddingLeft: 4 }}>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="panel-label" style={{ margin: 0, width: 48, flexShrink: 0 }}>Color</span>
+              <button
+                ref={glowSwatchRef}
+                onClick={() => setGlowColorOpen((o) => !o)}
+                style={{ width: 28, height: 22, borderRadius: 4, border: '1px solid var(--border)', background: glow.color, cursor: 'pointer', flexShrink: 0 }}
+              />
+              {glowColorOpen && (
+                <ColorPicker value={glow.color} onChange={(c) => patchGlow({ color: c }, true)}
+                  onCommit={() => { patchGlow({ color: glow.color }); setGlowColorOpen(false) }}
+                  onClose={() => setGlowColorOpen(false)} anchorRef={glowSwatchRef} />
+              )}
+            </div>
+            <SliderRow label="Opacity" value={glow.opacity} onChange={(v) => patchGlow({ opacity: v }, true)} />
+            <SliderRow label="Blur" value={glow.blur} onChange={(v) => patchGlow({ blur: v }, true)} min={0} max={30} step={0.5} />
+          </div>
+        )}
+      </div>
+
       {/* ── Blur ── */}
       <div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-          <button
-            onClick={toggleBlur}
-            style={{
-              width: 30, height: 16, borderRadius: 8, border: 'none', cursor: 'pointer', padding: 0,
-              background: blurActive ? 'var(--accent)' : 'rgba(255,255,255,0.12)',
-              position: 'relative', transition: 'background 0.15s', flexShrink: 0,
-            }}
-          >
-            <span style={{
-              position: 'absolute', top: 2, left: blurActive ? 16 : 2,
-              width: 12, height: 12, borderRadius: '50%', background: '#fff', transition: 'left 0.15s',
-            }} />
-          </button>
-          <span style={{ fontSize: 11, color: blurActive ? 'var(--text)' : 'var(--text-dim)' }}>Blur</span>
-        </div>
+        <ToggleRow label="Blur" active={blurActive} onToggle={toggleBlur} />
         {blurActive && blur && (
           <div style={{ paddingLeft: 4 }}>
             <SliderRow label="Amount" value={blur.amount} onChange={(v) => patchBlur({ amount: v })} min={0} max={20} step={0.5} />
@@ -258,13 +320,13 @@ function ShapeProperties({ shape }: { shape: Shape }) {
       {/* Geometry */}
       <div className="panel-section">
         <div className="panel-label">Transform</div>
-        {shape.type === 'rect' && (
+        {(shape.type === 'rect' || shape.type === 'frame') && (
           <>
             <NumInput label="X" value={shape.x} onChange={(v) => update({ x: v } as any)} />
             <NumInput label="Y" value={shape.y} onChange={(v) => update({ y: v } as any)} />
             <NumInput label="W" value={shape.width} onChange={(v) => update({ width: Math.max(1, v) } as any)} min={1} />
             <NumInput label="H" value={shape.height} onChange={(v) => update({ height: Math.max(1, v) } as any)} min={1} />
-            <NumInput label="Rx" value={shape.rx} onChange={(v) => update({ rx: v } as any)} min={0} />
+            {shape.type === 'rect' && <NumInput label="Rx" value={shape.rx} onChange={(v) => update({ rx: v } as any)} min={0} />}
           </>
         )}
         {shape.type === 'circle' && (
@@ -345,6 +407,33 @@ function ShapeProperties({ shape }: { shape: Shape }) {
             ↓ Back
           </button>
         </div>
+
+        {/* Skew / Deform */}
+        <div style={{ marginTop: 10 }}>
+          <div className="panel-label" style={{ marginBottom: 4 }}>Deform</div>
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 4 }}>
+            <span style={{ fontSize: 10, color: 'var(--text-dim)', width: 42, flexShrink: 0 }}>Skew X</span>
+            <input
+              type="range" min={-60} max={60} step={1}
+              value={(shape as any).skewX ?? 0}
+              onChange={(e) => updateShape(shape.id, { skewX: parseFloat(e.target.value) } as any)}
+              onMouseUp={() => commit()}
+              style={{ flex: 1 }}
+            />
+            <span style={{ fontSize: 10, color: 'var(--text-dim)', width: 24, textAlign: 'right' }}>{Math.round((shape as any).skewX ?? 0)}°</span>
+          </div>
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+            <span style={{ fontSize: 10, color: 'var(--text-dim)', width: 42, flexShrink: 0 }}>Skew Y</span>
+            <input
+              type="range" min={-60} max={60} step={1}
+              value={(shape as any).skewY ?? 0}
+              onChange={(e) => updateShape(shape.id, { skewY: parseFloat(e.target.value) } as any)}
+              onMouseUp={() => commit()}
+              style={{ flex: 1 }}
+            />
+            <span style={{ fontSize: 10, color: 'var(--text-dim)', width: 24, textAlign: 'right' }}>{Math.round((shape as any).skewY ?? 0)}°</span>
+          </div>
+        </div>
       </div>
 
       {/* Fill */}
@@ -356,6 +445,50 @@ function ShapeProperties({ shape }: { shape: Shape }) {
           value={shape.gradientFill}
           onChange={(gf) => update({ gradientFill: gf } as any)}
         />
+        {/* Pattern Fill */}
+        <div style={{ marginTop: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+            <span style={{ fontSize: 10, color: 'var(--text-dim)', flex: 1 }}>Pattern</span>
+            <button
+              style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, border: '1px solid var(--border)', background: shape.patternFill ? 'rgba(233,69,96,0.15)' : 'rgba(255,255,255,0.04)', color: shape.patternFill ? 'var(--accent)' : 'var(--text-dim)', cursor: 'pointer' }}
+              onClick={() => {
+                if (shape.patternFill) update({ patternFill: undefined } as any)
+                else update({ patternFill: { type: 'stripes', color: '#ffffff', size: 8, angle: 0 } } as any)
+              }}
+            >{shape.patternFill ? 'Remove' : 'Add'}</button>
+          </div>
+          {shape.patternFill && (() => {
+            const pf: PatternFill = shape.patternFill!
+            return (
+              <div style={{ paddingLeft: 4 }}>
+                <div style={{ display: 'flex', gap: 3, marginBottom: 4 }}>
+                  {(['stripes', 'dots', 'grid', 'crosshatch'] as const).map((t) => (
+                    <button key={t} title={t}
+                      onClick={() => update({ patternFill: { ...pf, type: t } } as any)}
+                      style={{ flex: 1, padding: '2px 0', borderRadius: 4, border: `1px solid ${pf.type === t ? 'var(--accent)' : 'var(--border)'}`, background: pf.type === t ? 'rgba(233,69,96,0.15)' : 'rgba(255,255,255,0.04)', cursor: 'pointer', fontSize: 9, color: 'var(--text-dim)' }}>
+                      {t === 'stripes' ? '≡' : t === 'dots' ? '⁙' : t === 'grid' ? '⊞' : '✕'}
+                    </button>
+                  ))}
+                </div>
+                <ColorInput label="Color" value={pf.color} onChange={(v) => updateShape(shape.id, { patternFill: { ...pf, color: v } } as any)} onCommit={commit} />
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 4 }}>
+                  <span style={{ fontSize: 10, color: 'var(--text-dim)', width: 48, flexShrink: 0 }}>Size</span>
+                  <input type="range" min={2} max={40} step={1} value={pf.size}
+                    onChange={(e) => updateShape(shape.id, { patternFill: { ...pf, size: parseFloat(e.target.value) } } as any)}
+                    onMouseUp={commit} style={{ flex: 1 }} />
+                  <span style={{ fontSize: 10, color: 'var(--text-dim)', width: 24, textAlign: 'right' }}>{pf.size}</span>
+                </div>
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <span style={{ fontSize: 10, color: 'var(--text-dim)', width: 48, flexShrink: 0 }}>Angle</span>
+                  <input type="range" min={0} max={180} step={1} value={pf.angle}
+                    onChange={(e) => updateShape(shape.id, { patternFill: { ...pf, angle: parseFloat(e.target.value) } } as any)}
+                    onMouseUp={commit} style={{ flex: 1 }} />
+                  <span style={{ fontSize: 10, color: 'var(--text-dim)', width: 24, textAlign: 'right' }}>{pf.angle}°</span>
+                </div>
+              </div>
+            )
+          })()}
+        </div>
       </div>
 
       {/* Stroke */}
@@ -414,26 +547,54 @@ function ShapeProperties({ shape }: { shape: Shape }) {
           <span className="panel-label" style={{ margin: 0, width: 48, flexShrink: 0 }}>Caps</span>
           <div style={{ display: 'flex', gap: 4, flex: 1 }}>
             {(['butt', 'round', 'square'] as const).map((cap) => (
-              <button
-                key={cap}
-                title={cap}
-                onClick={() => update({ strokeLinecap: cap } as any)}
-                style={{
-                  flex: 1,
-                  padding: '3px 0',
-                  borderRadius: 5,
-                  border: `1px solid ${(shape.strokeLinecap || 'round') === cap ? 'var(--accent)' : 'var(--border)'}`,
-                  background: (shape.strokeLinecap || 'round') === cap ? 'rgba(233,69,96,0.15)' : 'rgba(255,255,255,0.04)',
-                  cursor: 'pointer',
-                  fontSize: 9,
-                  color: 'var(--text-dim)',
-                }}
-              >
+              <button key={cap} title={cap} onClick={() => update({ strokeLinecap: cap } as any)}
+                style={{ flex: 1, padding: '3px 0', borderRadius: 5, border: `1px solid ${(shape.strokeLinecap || 'round') === cap ? 'var(--accent)' : 'var(--border)'}`, background: (shape.strokeLinecap || 'round') === cap ? 'rgba(233,69,96,0.15)' : 'rgba(255,255,255,0.04)', cursor: 'pointer', fontSize: 9, color: 'var(--text-dim)' }}>
                 {cap}
               </button>
             ))}
           </div>
         </div>
+
+        {/* Linejoin */}
+        <div className="flex items-center gap-2 mb-1">
+          <span className="panel-label" style={{ margin: 0, width: 48, flexShrink: 0 }}>Join</span>
+          <div style={{ display: 'flex', gap: 4, flex: 1 }}>
+            {(['miter', 'round', 'bevel'] as const).map((join) => (
+              <button key={join} title={join} onClick={() => update({ strokeLinejoin: join } as any)}
+                style={{ flex: 1, padding: '3px 0', borderRadius: 5, border: `1px solid ${(shape.strokeLinejoin || 'miter') === join ? 'var(--accent)' : 'var(--border)'}`, background: (shape.strokeLinejoin || 'miter') === join ? 'rgba(233,69,96,0.15)' : 'rgba(255,255,255,0.04)', cursor: 'pointer', fontSize: 9, color: 'var(--text-dim)' }}>
+                {join}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Arrowheads / Markers — only for line and path shapes */}
+        {(shape.type === 'line' || shape.type === 'path') && (
+          <>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="panel-label" style={{ margin: 0, width: 48, flexShrink: 0 }}>Start</span>
+              <select className="input-field" style={{ flex: 1 }}
+                value={shape.markerStart || 'none'}
+                onChange={(e) => update({ markerStart: e.target.value as any })}>
+                <option value="none">None</option>
+                <option value="arrow">Arrow</option>
+                <option value="dot">Dot</option>
+                <option value="diamond">Diamond</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="panel-label" style={{ margin: 0, width: 48, flexShrink: 0 }}>End</span>
+              <select className="input-field" style={{ flex: 1 }}
+                value={shape.markerEnd || 'none'}
+                onChange={(e) => update({ markerEnd: e.target.value as any })}>
+                <option value="none">None</option>
+                <option value="arrow">Arrow</option>
+                <option value="dot">Dot</option>
+                <option value="diamond">Diamond</option>
+              </select>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Opacity */}
@@ -457,13 +618,51 @@ function ShapeProperties({ shape }: { shape: Shape }) {
             style={{ resize: 'vertical' }}
           />
           <div style={{ marginTop: 6 }}>
-            <select className="input-field" value={shape.fontFamily} onChange={(e) => update({ fontFamily: e.target.value } as any)}>
-              <option>sans-serif</option>
-              <option>serif</option>
-              <option>monospace</option>
-              <option>Arial</option>
-              <option>Georgia</option>
-              <option>Verdana</option>
+            <select
+              className="input-field"
+              value={shape.fontFamily}
+              onChange={(e) => update({ fontFamily: e.target.value } as any)}
+              style={{ fontFamily: shape.fontFamily }}
+            >
+              <optgroup label="Sistema">
+                <option value="sans-serif" style={{ fontFamily: 'sans-serif' }}>sans-serif</option>
+                <option value="serif" style={{ fontFamily: 'serif' }}>serif</option>
+                <option value="monospace" style={{ fontFamily: 'monospace' }}>monospace</option>
+                <option value="Arial" style={{ fontFamily: 'Arial' }}>Arial</option>
+                <option value="Georgia" style={{ fontFamily: 'Georgia' }}>Georgia</option>
+                <option value="Verdana" style={{ fontFamily: 'Verdana' }}>Verdana</option>
+                <option value="Trebuchet MS" style={{ fontFamily: 'Trebuchet MS' }}>Trebuchet MS</option>
+                <option value="Times New Roman" style={{ fontFamily: 'Times New Roman' }}>Times New Roman</option>
+                <option value="Courier New" style={{ fontFamily: 'Courier New' }}>Courier New</option>
+              </optgroup>
+              <optgroup label="Sans-serif">
+                <option value="Inter" style={{ fontFamily: 'Inter' }}>Inter</option>
+                <option value="Roboto" style={{ fontFamily: 'Roboto' }}>Roboto</option>
+                <option value="Open Sans" style={{ fontFamily: 'Open Sans' }}>Open Sans</option>
+                <option value="Lato" style={{ fontFamily: 'Lato' }}>Lato</option>
+                <option value="Montserrat" style={{ fontFamily: 'Montserrat' }}>Montserrat</option>
+                <option value="Poppins" style={{ fontFamily: 'Poppins' }}>Poppins</option>
+                <option value="Nunito" style={{ fontFamily: 'Nunito' }}>Nunito</option>
+                <option value="Raleway" style={{ fontFamily: 'Raleway' }}>Raleway</option>
+                <option value="Oswald" style={{ fontFamily: 'Oswald' }}>Oswald</option>
+                <option value="Ubuntu" style={{ fontFamily: 'Ubuntu' }}>Ubuntu</option>
+                <option value="PT Sans" style={{ fontFamily: 'PT Sans' }}>PT Sans</option>
+                <option value="Noto Sans" style={{ fontFamily: 'Noto Sans' }}>Noto Sans</option>
+              </optgroup>
+              <optgroup label="Serif">
+                <option value="Playfair Display" style={{ fontFamily: 'Playfair Display' }}>Playfair Display</option>
+                <option value="Merriweather" style={{ fontFamily: 'Merriweather' }}>Merriweather</option>
+              </optgroup>
+              <optgroup label="Display / Decorativas">
+                <option value="Bebas Neue" style={{ fontFamily: 'Bebas Neue' }}>Bebas Neue</option>
+                <option value="Righteous" style={{ fontFamily: 'Righteous' }}>Righteous</option>
+                <option value="Pacifico" style={{ fontFamily: 'Pacifico' }}>Pacifico</option>
+                <option value="Lobster" style={{ fontFamily: 'Lobster' }}>Lobster</option>
+                <option value="Dancing Script" style={{ fontFamily: 'Dancing Script' }}>Dancing Script</option>
+              </optgroup>
+              <optgroup label="Monoespaciadas">
+                <option value="Source Code Pro" style={{ fontFamily: 'Source Code Pro' }}>Source Code Pro</option>
+              </optgroup>
             </select>
           </div>
           <div style={{ marginTop: 4 }}>
@@ -481,6 +680,108 @@ function ShapeProperties({ shape }: { shape: Shape }) {
               <option value="end">Right</option>
             </select>
           </div>
+
+          {/* Letter spacing */}
+          <div style={{ marginTop: 8 }}>
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 4 }}>
+              <span style={{ fontSize: 10, color: 'var(--text-dim)', width: 72, flexShrink: 0 }}>Letter spacing</span>
+              <input
+                type="range" min={-10} max={40} step={0.5}
+                value={(shape as any).letterSpacing ?? 0}
+                onChange={(e) => updateShape(shape.id, { letterSpacing: parseFloat(e.target.value) } as any)}
+                onMouseUp={() => commit()}
+                style={{ flex: 1 }}
+              />
+              <span style={{ fontSize: 10, color: 'var(--text-dim)', width: 28, textAlign: 'right' }}>{(shape as any).letterSpacing ?? 0}</span>
+            </div>
+          </div>
+
+          {/* Per-character offsets */}
+          {!!(shape as any).charOffsets?.some((v: number) => v !== 0) && (
+            <div style={{ marginTop: 4 }}>
+              <button
+                style={{ width: '100%', padding: '3px 0', background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-dim)', fontSize: 10, cursor: 'pointer' }}
+                onClick={() => update({ charOffsets: undefined } as any)}
+              >
+                Reset character offsets
+              </button>
+            </div>
+          )}
+
+          {/* Arc / Curved text */}
+          <div style={{ marginTop: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <span className="panel-label" style={{ margin: 0 }}>Texto en arco</span>
+              <input
+                type="checkbox"
+                checked={!!(shape as any).textOnArc}
+                onChange={(e) => update({ textOnArc: e.target.checked } as any)}
+                style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
+              />
+            </div>
+            {(shape as any).textOnArc && (
+              <>
+                <div style={{ display: 'flex', gap: 4, marginBottom: 4 }}>
+                  <button
+                    onClick={() => update({ arcDirection: 'up' } as any)}
+                    style={{ flex: 1, padding: '4px 0', borderRadius: 5, border: `1px solid ${(shape as any).arcDirection !== 'down' ? 'var(--accent)' : 'var(--border)'}`, background: (shape as any).arcDirection !== 'down' ? 'rgba(233,69,96,0.15)' : 'rgba(255,255,255,0.04)', cursor: 'pointer', fontSize: 11, color: 'var(--text)' }}
+                  >⌢ Arriba</button>
+                  <button
+                    onClick={() => update({ arcDirection: 'down' } as any)}
+                    style={{ flex: 1, padding: '4px 0', borderRadius: 5, border: `1px solid ${(shape as any).arcDirection === 'down' ? 'var(--accent)' : 'var(--border)'}`, background: (shape as any).arcDirection === 'down' ? 'rgba(233,69,96,0.15)' : 'rgba(255,255,255,0.04)', cursor: 'pointer', fontSize: 11, color: 'var(--text)' }}
+                  >⌣ Abajo</button>
+                </div>
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 4 }}>
+                  <span style={{ fontSize: 10, color: 'var(--text-dim)', width: 42, flexShrink: 0 }}>Radio</span>
+                  <input
+                    type="range" min={10} max={300} step={1}
+                    value={(shape as any).arcRadius ?? shape.fontSize * 3}
+                    onChange={(e) => updateShape(shape.id, { arcRadius: parseFloat(e.target.value) } as any)}
+                    onMouseUp={() => commit()}
+                    style={{ flex: 1 }}
+                  />
+                  <span style={{ fontSize: 10, color: 'var(--text-dim)', width: 28, textAlign: 'right' }}>{Math.round((shape as any).arcRadius ?? shape.fontSize * 3)}</span>
+                </div>
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <span style={{ fontSize: 10, color: 'var(--text-dim)', width: 42, flexShrink: 0 }}>Offset</span>
+                  <input
+                    type="range" min={0} max={100} step={1}
+                    value={(shape as any).arcOffset ?? 50}
+                    onChange={(e) => updateShape(shape.id, { arcOffset: parseFloat(e.target.value) } as any)}
+                    onMouseUp={() => commit()}
+                    style={{ flex: 1 }}
+                  />
+                  <span style={{ fontSize: 10, color: 'var(--text-dim)', width: 28, textAlign: 'right' }}>{Math.round((shape as any).arcOffset ?? 50)}%</span>
+                </div>
+              </>
+            )}
+          </div>
+
+          <button
+            style={{ marginTop: 8, width: '100%', padding: '5px 0', background: 'rgba(255,255,255,0.06)', border: '1px solid var(--border)', borderRadius: 5, color: 'var(--text-dim)', fontSize: 11, cursor: 'pointer' }}
+            onClick={() => {
+              const d = textToPath(shape as TextShape)
+              if (!d) return
+              const store = useEditorStore.getState()
+              store.deleteShapes([shape.id])
+              store.addShape({ ...shape, type: 'path', d, name: shape.name + ' (path)' } as any)
+            }}
+          >
+            Convert to Path
+          </button>
+        </div>
+      )}
+
+      {/* Clip mask status */}
+      {shape.clippedBy && (
+        <div className="panel-section">
+          <div className="panel-label">Clip Mask</div>
+          <button
+            style={{ width: '100%', padding: '5px 0', background: 'rgba(255,255,255,0.06)', border: '1px solid var(--border)', borderRadius: 5, color: 'var(--text-dim)', fontSize: 11, cursor: 'pointer' }}
+            onClick={() => useEditorStore.getState().releaseClipMask(shape.clippedBy!)}
+          >
+            Release Clip Mask
+          </button>
         </div>
       )}
     </div>
@@ -533,7 +834,7 @@ const BOOL_OPS = [
 
 function MultiSelectPanel({ selectedShapes, selectedIds }: { selectedShapes: Shape[]; selectedIds: string[] }) {
   const store = useEditorStore()
-  const { updateShape, commit, alignShapes } = store
+  const { updateShape, commit, alignShapes, layerOrder } = store
 
   function updateAll(partial: Partial<Shape>) {
     selectedIds.forEach((id) => updateShape(id, partial))
@@ -565,6 +866,27 @@ function MultiSelectPanel({ selectedShapes, selectedIds }: { selectedShapes: Sha
       <ColorInput label="Fill" value={firstFill} onChange={(v) => updateAllLive({ fill: v })} onCommit={commit} />
       <ColorInput label="Stroke" value={firstStroke} onChange={(v) => updateAllLive({ stroke: v })} onCommit={commit} />
       <NumInput label="S.Width" value={firstStrokeWidth} onChange={(v) => updateAll({ strokeWidth: Math.max(0, v) })} min={0} step={0.5} />
+
+      {/* Clip Mask — only available for exactly 2 shapes */}
+      {selectedShapes.length === 2 && (
+        <>
+          <div className="panel-label" style={{ marginBottom: 4, marginTop: 8 }}>Clip Mask</div>
+          <button
+            title="Top shape clips the bottom shape"
+            onClick={() => {
+              // Determine top (higher layerOrder index) and bottom
+              const idxA = layerOrder.indexOf(selectedIds[0])
+              const idxB = layerOrder.indexOf(selectedIds[1])
+              const topId = idxA > idxB ? selectedIds[0] : selectedIds[1]
+              const bottomId = idxA > idxB ? selectedIds[1] : selectedIds[0]
+              store.makeClipMask(topId, bottomId)
+            }}
+            style={{ width: '100%', padding: '5px 0', background: 'rgba(255,255,255,0.06)', border: '1px solid var(--border)', borderRadius: 5, color: 'var(--text)', fontSize: 11, cursor: 'pointer', marginBottom: 8 }}
+          >
+            Make Clip Mask
+          </button>
+        </>
+      )}
 
       {/* Boolean operations */}
       <div className="panel-label" style={{ marginBottom: 4, marginTop: 8 }}>Boolean Ops</div>

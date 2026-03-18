@@ -1,14 +1,15 @@
-import React, { useEffect } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Toolbar } from './components/Toolbar'
 import { SVGCanvas } from './components/canvas/SVGCanvas'
 import { PropertiesPanel } from './components/PropertiesPanel'
 import { LayersPanel } from './components/LayersPanel'
 import { CodePanel } from './components/CodePanel'
 import { ExportModal } from './components/ExportModal'
+import { Rulers, RULER_SIZE_PX } from './components/canvas/Rulers'
 import { useEditorStore } from './store/useEditorStore'
 
 export default function App() {
-  const { codePanelOpen, exportModalOpen, zoom, setZoom, panX, panY, setPan, layersPanelOpen, setLayersPanelOpen, canvasSize } = useEditorStore()
+  const { codePanelOpen, exportModalOpen, zoom, setZoom, panX, panY, setPan, layersPanelOpen, setLayersPanelOpen, canvasSize, clearCanvas } = useEditorStore()
 
   const fitView = () => {
     const toolbarW = 52
@@ -133,6 +134,16 @@ export default function App() {
         >
           1:1
         </button>
+        <div style={{ width: 1, height: 16, background: 'var(--border)' }} />
+        <button
+          onClick={() => {
+            if (window.confirm('¿Borrar todo el canvas y empezar de cero?')) clearCanvas()
+          }}
+          title="New canvas — delete all shapes"
+          style={{ fontSize: 11, padding: '2px 8px', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-dim)', cursor: 'pointer' }}
+        >
+          New
+        </button>
       </header>
 
       {/* Main content */}
@@ -142,36 +153,52 @@ export default function App() {
         {layersPanelOpen && <LayersPanel />}
 
         {/* Canvas area */}
-        <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-          <SVGCanvas />
-
-          {/* Status bar */}
-          <div style={{
-            position: 'absolute',
-            bottom: codePanelOpen ? 240 : 0,
-            left: 0,
-            right: 0,
-            height: 24,
-            background: 'var(--bg-panel)',
-            borderTop: '1px solid var(--border)',
-            display: 'flex',
-            alignItems: 'center',
-            padding: '0 12px',
-            gap: 16,
-            fontSize: 10,
-            color: 'var(--text-dim)',
-            fontFamily: 'monospace',
-          }}>
-            <StatusBarContent />
-          </div>
-
-          {codePanelOpen && <CodePanel />}
-        </div>
+        <CanvasArea />
 
         <PropertiesPanel />
       </div>
 
       {exportModalOpen && <ExportModal />}
+    </div>
+  )
+}
+
+function CanvasArea() {
+  const { zoom, panX, panY, codePanelOpen } = useEditorStore()
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [size, setSize] = useState({ w: 0, h: 0 })
+
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const ro = new ResizeObserver((entries) => {
+      const r = entries[0].contentRect
+      setSize({ w: r.width, h: r.height })
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  return (
+    <div ref={containerRef} style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+      <Rulers zoom={zoom} panX={panX} panY={panY} containerW={size.w} containerH={size.h} />
+      <div style={{ position: 'absolute', inset: 0, top: RULER_SIZE_PX, left: RULER_SIZE_PX }}>
+        <SVGCanvas />
+      </div>
+      {/* Status bar */}
+      <div style={{
+        position: 'absolute',
+        bottom: codePanelOpen ? 240 : 0,
+        left: 0, right: 0, height: 24,
+        background: 'var(--bg-panel)',
+        borderTop: '1px solid var(--border)',
+        display: 'flex', alignItems: 'center',
+        padding: '0 12px', gap: 16,
+        fontSize: 10, color: 'var(--text-dim)', fontFamily: 'monospace',
+      }}>
+        <StatusBarContent />
+      </div>
+      {codePanelOpen && <CodePanel />}
     </div>
   )
 }
