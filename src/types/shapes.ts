@@ -1,4 +1,4 @@
-export type ShapeType = 'rect' | 'circle' | 'ellipse' | 'line' | 'path' | 'text' | 'polygon' | 'frame'
+export type ShapeType = 'rect' | 'circle' | 'ellipse' | 'line' | 'path' | 'text' | 'polygon' | 'frame' | 'blend'
 
 export interface GradientStop {
   offset: number  // 0–1
@@ -216,6 +216,13 @@ export interface FrameShape extends BaseShape {
   height: number
 }
 
+export interface BlendShape extends BaseShape {
+  type: 'blend'
+  shape1: Shape        // embedded first source shape
+  shape2: Shape        // embedded second source shape
+  steps: number        // intermediate steps (not counting the two endpoints)
+}
+
 export type Shape =
   | RectShape
   | CircleShape
@@ -225,6 +232,7 @@ export type Shape =
   | TextShape
   | PolygonShape
   | FrameShape
+  | BlendShape
 
 export interface BBox {
   x: number

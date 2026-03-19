@@ -1,7 +1,8 @@
 import React from 'react'
-import type { Shape, GradientFill, ShapeFilters, PatternFill } from '../../types/shapes'
+import type { Shape, GradientFill, ShapeFilters, PatternFill, BlendShape } from '../../types/shapes'
 import { polygonPoints, buildShapeTransform } from '../../utils/geometry'
 import { renderBrushPaths, getBrushPatternPositions, type BrushDef } from '../../utils/brushPath'
+import { computeBlendSteps } from '../../utils/blendShapes'
 
 interface Props {
   shape: Shape
@@ -419,6 +420,32 @@ export function ShapeRenderer({ shape, isSelected, onPointerDown, activeTool, is
     case 'polygon': {
       const pts = polygonPoints(shape.cx, shape.cy, shape.size, shape.sides, shape.innerRadius, shape.isStar)
       return wrapWithDefs(<polygon points={pts} {...common} />)
+    }
+    case 'blend': {
+      const blendShape = shape as BlendShape
+      const steps = computeBlendSteps({ shape1: blendShape.shape1, shape2: blendShape.shape2, steps: blendShape.steps })
+      return (
+        <g
+          opacity={shape.opacity}
+          pointerEvents={pe}
+          onPointerDown={(e: React.PointerEvent) => {
+            if (!isSelectTool) return
+            e.stopPropagation()
+            onPointerDown(e, shape.id)
+          }}
+          style={{ cursor: isSelectTool ? 'move' : 'crosshair' }}
+        >
+          {steps.map((s, i) => (
+            <ShapeRenderer
+              key={i}
+              shape={{ ...s, id: `${shape.id}-s${i}` }}
+              isSelected={false}
+              onPointerDown={() => {}}
+              activeTool={activeTool}
+            />
+          ))}
+        </g>
+      )
     }
     default:
       return null

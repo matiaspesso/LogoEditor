@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react'
 import { useEditorStore } from '../store/useEditorStore'
-import type { Shape, DropShadow, BlurEffect, InnerShadow, GlowEffect, ShapeFilters, TextShape, PatternFill } from '../types/shapes'
+import type { Shape, DropShadow, BlurEffect, InnerShadow, GlowEffect, ShapeFilters, TextShape, PatternFill, BlendShape } from '../types/shapes'
 import type { BrushDef } from '../utils/brushPath'
 import { ColorPicker } from './ui/ColorPicker'
 import { AlignBar } from './ui/AlignBar'
@@ -357,6 +357,43 @@ function ShapeProperties({ shape }: { shape: Shape }) {
 
   // For color inputs: live update without committing, commit only on drag end
   const updateColor = (partial: Partial<Shape>) => updateShape(shape.id, partial)
+
+  // Blend shape early return
+  if (shape.type === 'blend') {
+    const blendShape = shape as BlendShape
+    return (
+      <div>
+        {/* Name */}
+        <div className="panel-section">
+          <div className="panel-label">Name</div>
+          <input
+            className="input-field"
+            value={shape.name}
+            onChange={(e) => update({ name: e.target.value })}
+          />
+        </div>
+        {/* Blend controls */}
+        <div className="panel-section">
+          <div className="panel-label">Blend</div>
+          <NumInput label="Steps" value={blendShape.steps} min={0} max={100}
+            onChange={v => update({ steps: v } as any)} />
+          <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+            <button
+              style={{ width: '100%', padding: '5px 0', fontSize: 11, background: 'rgba(255,255,255,0.06)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)', cursor: 'pointer' }}
+              onClick={() => store.expandBlend(shape.id)}
+            >Expand Blend</button>
+          </div>
+          <div style={{ marginTop: 6, fontSize: 10, color: 'var(--text-dim)', lineHeight: 1.4 }}>
+            {blendShape.steps + 2} shapes total · {blendShape.steps} intermediate
+          </div>
+        </div>
+        {/* Opacity only */}
+        <div className="panel-section">
+          <SliderRow label="Opacity" value={shape.opacity} onChange={v => update({ opacity: v })} />
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div>
@@ -1136,6 +1173,7 @@ function MultiSelectPanel({ selectedShapes, selectedIds }: { selectedShapes: Sha
   const store = useEditorStore()
   const { updateShape, commit, alignShapes, layerOrder } = store
   const [alignRef, setAlignRef] = useState<'selection' | 'canvas'>('selection')
+  const [blendSteps, setBlendSteps] = useState(5)
 
   function updateAll(partial: Partial<Shape>) {
     selectedIds.forEach((id) => updateShape(id, partial))
@@ -1197,6 +1235,27 @@ function MultiSelectPanel({ selectedShapes, selectedIds }: { selectedShapes: Sha
           >
             Make Clip Mask
           </button>
+        </>
+      )}
+
+      {/* Blend — only available for exactly 2 non-blend shapes */}
+      {selectedShapes.length === 2 && !selectedShapes.some(s => s.type === 'blend') && (
+        <>
+          <div className="panel-label" style={{ marginBottom: 4, marginTop: 8 }}>Blend</div>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
+            <span style={{ fontSize: 11, color: 'var(--text-dim)', width: 48, flexShrink: 0 }}>Steps</span>
+            <input
+              type="number" min={1} max={50} value={blendSteps}
+              onChange={e => setBlendSteps(Math.max(1, Math.min(50, parseInt(e.target.value) || 1)))}
+              className="input-field" style={{ flex: 1, textAlign: 'center' }}
+            />
+          </div>
+          <button
+            style={{ width: '100%', padding: '6px 0', fontSize: 12, background: 'rgba(233,69,96,0.15)', border: '1px solid var(--accent)', borderRadius: 5, color: 'var(--text)', cursor: 'pointer', marginBottom: 8 }}
+            onClick={() => {
+              useEditorStore.getState().createBlend(selectedIds[0], selectedIds[1], blendSteps)
+            }}
+          >Create Blend</button>
         </>
       )}
 

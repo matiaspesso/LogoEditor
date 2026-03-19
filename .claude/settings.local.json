@@ -21,7 +21,8 @@
       "Bash(node node_modules/typescript/bin/tsc --noEmit)",
       "Bash(node node_modules/vite/bin/vite.js build)",
       "Bash(git add:*)",
-      "Bash(grep -h \"^export\" /home/mati/Documents/Projects/LogoEditor/src/utils/*.ts)"
+      "Bash(grep -h \"^export\" /home/mati/Documents/Projects/LogoEditor/src/utils/*.ts)",
+      "Bash(echo \"Exit code: $?\")"
     ]
   }
 }

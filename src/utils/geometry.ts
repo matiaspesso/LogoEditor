@@ -29,6 +29,15 @@ export function getShapeBBox(shape: Shape): BBox {
       return { x: shape.x, y: shape.y - shape.fontSize, width: shape.fontSize * shape.text.length * 0.6, height: shape.fontSize }
     case 'polygon':
       return { x: shape.cx - shape.size, y: shape.cy - shape.size, width: shape.size * 2, height: shape.size * 2 }
+    case 'blend': {
+      const b1 = getShapeBBox((shape as any).shape1)
+      const b2 = getShapeBBox((shape as any).shape2)
+      const x = Math.min(b1.x, b2.x)
+      const y = Math.min(b1.y, b2.y)
+      const r2 = Math.max(b1.x + b1.width, b2.x + b2.width)
+      const b2b = Math.max(b1.y + b1.height, b2.y + b2.height)
+      return { x, y, width: r2 - x, height: b2b - y }
+    }
     default:
       return { x: 0, y: 0, width: 0, height: 0 }
   }
@@ -107,6 +116,13 @@ export function moveShape(shape: Shape, dx: number, dy: number): Partial<Shape> 
     }
     case 'text': return { x: shape.x + dx, y: shape.y + dy }
     case 'polygon': return { cx: shape.cx + dx, cy: shape.cy + dy }
+    case 'blend': {
+      const blendShape = shape as any
+      return {
+        shape1: { ...blendShape.shape1, ...moveShape(blendShape.shape1, dx, dy) },
+        shape2: { ...blendShape.shape2, ...moveShape(blendShape.shape2, dx, dy) },
+      }
+    }
     default: return {}
   }
 }

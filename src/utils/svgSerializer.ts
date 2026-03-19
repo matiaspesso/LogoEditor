@@ -1,6 +1,7 @@
-import type { Shape, GradientFill, PatternFill } from '../types/shapes'
+import type { Shape, GradientFill, PatternFill, BlendShape } from '../types/shapes'
 import type { CanvasSize } from '../store/useEditorStore'
 import { polygonPoints, buildShapeTransform } from './geometry'
+import { computeBlendSteps } from './blendShapes'
 
 function gradientDefString(shape: Shape): string {
   const gf = shape.gradientFill
@@ -252,6 +253,11 @@ function shapeToSVGElement(shape: Shape, allShapes?: Shape[]): string {
       const pts = polygonPoints(shape.cx, shape.cy, shape.size, shape.sides, shape.innerRadius, shape.isStar)
       const inner = `<polygon points="${pts}" ${base}${clipAttr}${saClipAttr}/>`
       return wrapOutside(inner)
+    }
+    case 'blend': {
+      const blendShape = shape as BlendShape
+      const steps = computeBlendSteps({ shape1: blendShape.shape1, shape2: blendShape.shape2, steps: blendShape.steps })
+      return `<g>${steps.map((s, i) => shapeToSVGElement({ ...s, id: `${shape.id}-s${i}` })).join('')}</g>`
     }
     default:
       return ''

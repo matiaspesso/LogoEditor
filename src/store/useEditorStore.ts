@@ -5,6 +5,7 @@ import type { Shape, ToolType, BBox, Guide, Artboard } from '../types/shapes'
 import type { ShapePreset } from '../data/shapePresets'
 import { getShapeBBox, moveShape } from '../utils/geometry'
 import { applyBooleanOp, type BooleanOpType } from '../utils/booleanOps'
+import { computeBlendSteps } from '../utils/blendShapes'
 
 export interface CanvasSize {
   width: number
@@ -110,6 +111,8 @@ interface EditorState {
   setActiveArtboard: (id: string | null) => void
   setEditingNodePathId: (id: string | null) => void
   setSelectedNodeIndex: (i: number | null) => void
+  createBlend: (id1: string, id2: string, steps: number) => string
+  expandBlend: (blendId: string) => void
 }
 
 export const useEditorStore = create<EditorState>()(
@@ -417,6 +420,59 @@ export const useEditorStore = create<EditorState>()(
     setActiveArtboard: (id) => set((s) => { s.activeArtboardId = id }),
     setEditingNodePathId: (id) => set((s) => { s.editingNodePathId = id }),
     setSelectedNodeIndex: (i) => set((s) => { s.selectedNodeIndex = i }),
+
+    createBlend: (id1, id2, steps) => {
+      const { shapes } = get()
+      const s1 = shapes.find(s => s.id === id1)
+      const s2 = shapes.find(s => s.id === id2)
+      if (!s1 || !s2) return ''
+      // Remove the two source shapes
+      set((st) => {
+        st.shapes = st.shapes.filter(s => s.id !== id1 && s.id !== id2)
+        st.layerOrder = st.layerOrder.filter(id => id !== id1 && id !== id2)
+        st.selectedIds = []
+      })
+      // Add the blend shape
+      const blendData = {
+        type: 'blend' as const,
+        shape1: JSON.parse(JSON.stringify(s1)),
+        shape2: JSON.parse(JSON.stringify(s2)),
+        steps,
+        fill: s1.fill,
+        fillOpacity: s1.fillOpacity,
+        stroke: s1.stroke,
+        strokeWidth: s1.strokeWidth,
+        strokeDasharray: s1.strokeDasharray,
+        strokeLinecap: s1.strokeLinecap,
+        opacity: 1,
+        rotation: 0,
+        locked: false,
+        visible: true,
+        name: `Blend (${s1.name} -> ${s2.name})`,
+      }
+      const id = get().addShape(blendData as any)
+      get().commit()
+      return id
+    },
+
+    expandBlend: (blendId) => {
+      const { shapes } = get()
+      const blend = shapes.find(s => s.id === blendId) as any
+      if (!blend || blend.type !== 'blend') return
+      const steps = computeBlendSteps({ shape1: blend.shape1, shape2: blend.shape2, steps: blend.steps })
+      set((st) => {
+        const blendIdx = st.layerOrder.indexOf(blendId)
+        st.shapes = st.shapes.filter(s => s.id !== blendId)
+        st.layerOrder = st.layerOrder.filter(id => id !== blendId)
+        steps.forEach((s, i) => {
+          const newId = nanoid(8)
+          const shape = { ...s, id: newId, name: `${blend.name} ${i + 1}` } as any
+          st.shapes.push(shape)
+          st.layerOrder.splice(blendIdx + i, 0, newId)
+        })
+      })
+      get().commit()
+    },
 
     commit: () => {
       const { shapes, layerOrder, past, backgroundColor, canvasSize, guides, artboards, swatches } = get()
