@@ -11,7 +11,15 @@
       "Bash(ls node_modules/polygon-clipping/*.d.ts)",
       "Bash(ls node_modules/polygon-clipping/src/*.d.ts)",
       "Bash(find node_modules/polygon-clipping -name *.d.ts)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(node_modules/.bin/tsc --noEmit)",
+      "Bash(./node_modules/.bin/tsc --noEmit)",
+      "Bash(bash -c \"node_modules/.bin/tsc --noEmit 2>&1\")",
+      "Bash(node_modules/typescript/bin/tsc --noEmit)",
+      "Bash(node_modules/.bin/vite build:*)",
+      "Bash(node_modules/vite/bin/vite.js build:*)",
+      "Bash(node node_modules/typescript/bin/tsc --noEmit)",
+      "Bash(node node_modules/vite/bin/vite.js build)"
     ]
   }
 }

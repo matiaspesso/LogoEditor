@@ -10,6 +10,8 @@ export interface GradientFill {
   type: 'linear' | 'radial'
   stops: GradientStop[]
   angle: number  // degrees, used for linear
+  x1?: number; y1?: number; x2?: number; y2?: number  // linear position overrides (objectBoundingBox)
+  cx?: number; cy?: number  // radial center overrides (objectBoundingBox)
 }
 
 export interface DropShadow {
@@ -67,6 +69,7 @@ export type ToolType =
   | 'polygon'
   | 'star'
   | 'frame'
+  | 'eyedropper'
   | 'pan'
 
 // Group registry for nested groups
@@ -122,6 +125,8 @@ export interface BaseShape {
   isClipSource?: boolean
   skewX?: number
   skewY?: number
+  strokeAlignment?: 'center' | 'inside' | 'outside'
+  artboardId?: string
 }
 
 export interface RectShape extends BaseShape {
@@ -172,6 +177,7 @@ export interface TextShape extends BaseShape {
   textAnchor: 'start' | 'middle' | 'end'
   letterSpacing?: number
   charOffsets?: number[]   // per-character cumulative x offset (index i = how far char i is from its natural position)
+  charOffsetsY?: number[]  // per-character cumulative y offset (positive = downward / inward for arc text)
   textOnArc?: boolean
   arcRadius?: number
   arcDirection?: 'up' | 'down'
@@ -211,6 +217,12 @@ export interface BBox {
   y: number
   width: number
   height: number
+}
+
+export interface Guide {
+  id: string
+  type: 'h' | 'v'
+  position: number
 }
 
 export const CANVAS_PRESETS = [

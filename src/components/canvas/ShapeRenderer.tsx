@@ -104,18 +104,18 @@ function renderGradientDef(shape: Shape): React.ReactElement | null {
   ))
   if (type === 'linear') {
     const rad = (angle * Math.PI) / 180
-    const x1 = 0.5 - 0.5 * Math.cos(rad)
-    const y1 = 0.5 - 0.5 * Math.sin(rad)
-    const x2 = 0.5 + 0.5 * Math.cos(rad)
-    const y2 = 0.5 + 0.5 * Math.sin(rad)
+    const gx1 = gf.x1 ?? (0.5 - 0.5 * Math.cos(rad))
+    const gy1 = gf.y1 ?? (0.5 - 0.5 * Math.sin(rad))
+    const gx2 = gf.x2 ?? (0.5 + 0.5 * Math.cos(rad))
+    const gy2 = gf.y2 ?? (0.5 + 0.5 * Math.sin(rad))
     return (
-      <linearGradient id={id} x1={x1} y1={y1} x2={x2} y2={y2} gradientUnits="objectBoundingBox">
+      <linearGradient id={id} x1={gx1} y1={gy1} x2={gx2} y2={gy2} gradientUnits="objectBoundingBox">
         {stopEls}
       </linearGradient>
     )
   }
   return (
-    <radialGradient id={id} cx="50%" cy="50%" r="50%" gradientUnits="objectBoundingBox">
+    <radialGradient id={id} cx={gf.cx ?? 0.5} cy={gf.cy ?? 0.5} r="50%" gradientUnits="objectBoundingBox">
       {stopEls}
     </radialGradient>
   )
@@ -201,6 +201,11 @@ export function ShapeRenderer({ shape, isSelected, onPointerDown, activeTool, is
       ? `url(#grad-${shape.id})`
       : shape.fill
 
+  const strokeAlign: string = (shape as any).strokeAlignment ?? 'center'
+  const hasStroke = shape.strokeWidth > 0 && shape.stroke !== 'none'
+  const isInsideStroke = strokeAlign === 'inside' && hasStroke
+  const isOutsideStroke = strokeAlign === 'outside' && hasStroke
+
   const gradDef = renderGradientDef(shape)
   const patternDef = renderPatternDef(shape)
   const filterDef = shape.filters ? renderFilterDef(shape.id, shape.filters) : null
@@ -221,7 +226,7 @@ export function ShapeRenderer({ shape, isSelected, onPointerDown, activeTool, is
     fill: fillValue,
     fillOpacity: shape.fillOpacity,
     stroke: shape.stroke,
-    strokeWidth: shape.strokeWidth,
+    strokeWidth: (isInsideStroke || isOutsideStroke) ? shape.strokeWidth * 2 : shape.strokeWidth,
     strokeDasharray: shape.strokeDasharray || undefined,
     strokeLinecap: (shape.strokeLinecap || 'round') as 'butt' | 'round' | 'square',
     strokeLinejoin: (shape.strokeLinejoin || 'miter') as 'miter' | 'round' | 'bevel',
@@ -241,19 +246,38 @@ export function ShapeRenderer({ shape, isSelected, onPointerDown, activeTool, is
   const clipGeom = clipSource ? renderClipGeometry(clipSource) : null
 
   function wrapWithDefs(el: React.ReactElement): React.ReactElement {
-    const hasDefs = gradDef || patternDef || filterDef || clipGeom || markerDef
-    if (!hasDefs) return el
-    const clipped = clipId ? React.cloneElement(el, { clipPath: `url(#${clipId})` } as any) : el
+    const hasDefs = gradDef || patternDef || filterDef || clipGeom || markerDef || isInsideStroke
+
+    if (isOutsideStroke) {
+      const strokeEl = React.cloneElement(el, { fill: 'none' } as any)
+      const fillEl = React.cloneElement(el, { stroke: 'none', strokeWidth: 0 } as any)
+      const clipFillEl = clipId ? React.cloneElement(fillEl, { clipPath: `url(#${clipId})` } as any) : fillEl
+      if (!hasDefs) return <>{strokeEl}{clipFillEl}</> as unknown as React.ReactElement
+      return (
+        <>
+          <defs>
+            {gradDef}{patternDef}{filterDef}{markerDef}
+            {clipGeom && <clipPath id={clipId}>{clipGeom}</clipPath>}
+          </defs>
+          {strokeEl}
+          {clipFillEl}
+        </>
+      ) as unknown as React.ReactElement
+    }
+
+    let finalEl = el
+    if (clipId) finalEl = React.cloneElement(finalEl, { clipPath: `url(#${clipId})` } as any)
+    if (isInsideStroke) finalEl = React.cloneElement(finalEl, { clipPath: `url(#sa-${shape.id})` } as any)
+
+    if (!hasDefs) return finalEl
     return (
       <>
         <defs>
-          {gradDef}
-          {patternDef}
-          {filterDef}
-          {markerDef}
+          {gradDef}{patternDef}{filterDef}{markerDef}
           {clipGeom && <clipPath id={clipId}>{clipGeom}</clipPath>}
+          {isInsideStroke && <clipPath id={`sa-${shape.id}`}>{renderClipGeometry(shape)}</clipPath>}
         </defs>
-        {clipped}
+        {finalEl}
       </>
     ) as unknown as React.ReactElement
   }
@@ -292,17 +316,27 @@ export function ShapeRenderer({ shape, isSelected, onPointerDown, activeTool, is
     case 'text': {
       const ls = (shape as any).letterSpacing
       const charOffsets: number[] | undefined = (shape as any).charOffsets
-      const hasCharOffsets = charOffsets && charOffsets.some((v: number) => v !== 0)
+      const charOffsetsY: number[] | undefined = (shape as any).charOffsetsY
+      const hasCharOffsets = (charOffsets && charOffsets.some((v: number) => v !== 0))
+        || (charOffsetsY && charOffsetsY.some((v: number) => v !== 0))
       const textContent = hasCharOffsets
         ? shape.text.split('').map((ch, i) => {
-            const dx = i === 0 ? (charOffsets![0] ?? 0) : (charOffsets![i] ?? 0) - (charOffsets![i - 1] ?? 0)
-            return <tspan key={i} dx={dx !== 0 ? dx : undefined}>{ch}</tspan>
+            const dx = i === 0 ? (charOffsets?.[0] ?? 0) : (charOffsets?.[i] ?? 0) - (charOffsets?.[i - 1] ?? 0)
+            const dy = i === 0 ? (charOffsetsY?.[0] ?? 0) : (charOffsetsY?.[i] ?? 0) - (charOffsetsY?.[i - 1] ?? 0)
+            return <tspan key={i} dx={dx !== 0 ? dx : undefined} dy={dy !== 0 ? dy : undefined}>{ch}</tspan>
           })
         : shape.text
 
       if (shape.textOnArc) {
         const arcPathId = `arcpath-${shape.id}`
         const offset = shape.arcOffset ?? 50
+        const arcTextContent = hasCharOffsets
+          ? shape.text.split('').map((ch, i) => {
+              const dx = i === 0 ? (charOffsets?.[0] ?? 0) : (charOffsets?.[i] ?? 0) - (charOffsets?.[i - 1] ?? 0)
+              const dy = i === 0 ? (charOffsetsY?.[0] ?? 0) : (charOffsetsY?.[i] ?? 0) - (charOffsetsY?.[i - 1] ?? 0)
+              return <tspan key={i} dx={dx !== 0 ? dx : undefined} dy={dy !== 0 ? dy : undefined}>{ch}</tspan>
+            })
+          : shape.text
         // Arc path is defined in the parent SVG's <defs> (added by SVGCanvas)
         return (
           <>
@@ -318,7 +352,7 @@ export function ShapeRenderer({ shape, isSelected, onPointerDown, activeTool, is
               {...common}
             >
               <textPath href={`#${arcPathId}`} startOffset={`${offset}%`} textAnchor="middle">
-                {shape.text}
+                {arcTextContent}
               </textPath>
             </text>
           </>

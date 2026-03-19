@@ -12,13 +12,13 @@ function gradientDefString(shape: Shape): string {
 
   if (gf.type === 'linear') {
     const rad = (gf.angle * Math.PI) / 180
-    const x1 = 0.5 - 0.5 * Math.cos(rad)
-    const y1 = 0.5 - 0.5 * Math.sin(rad)
-    const x2 = 0.5 + 0.5 * Math.cos(rad)
-    const y2 = 0.5 + 0.5 * Math.sin(rad)
+    const x1 = gf.x1 ?? (0.5 - 0.5 * Math.cos(rad))
+    const y1 = gf.y1 ?? (0.5 - 0.5 * Math.sin(rad))
+    const x2 = gf.x2 ?? (0.5 + 0.5 * Math.cos(rad))
+    const y2 = gf.y2 ?? (0.5 + 0.5 * Math.sin(rad))
     return `<linearGradient id="${id}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" gradientUnits="objectBoundingBox">${stops}</linearGradient>`
   }
-  return `<radialGradient id="${id}" cx="50%" cy="50%" r="50%" gradientUnits="objectBoundingBox">${stops}</radialGradient>`
+  return `<radialGradient id="${id}" cx="${gf.cx ?? 0.5}" cy="${gf.cy ?? 0.5}" r="50%" gradientUnits="objectBoundingBox">${stops}</radialGradient>`
 }
 
 function patternDefString(shape: Shape): string {
@@ -125,6 +125,27 @@ function markerDefString(shape: Shape): string {
 }
 
 
+function strokeAlignDefString(shape: Shape): string {
+  if (!((shape as any).strokeAlignment === 'inside') || !(shape.strokeWidth > 0) || shape.stroke === 'none') return ''
+  return `<clipPath id="sa-${shape.id}">${shapeGeometryStringInner(shape)}</clipPath>`
+}
+
+function shapeGeometryStringInner(shape: Shape): string {
+  switch (shape.type) {
+    case 'rect':
+    case 'frame':
+      return `<rect x="${shape.x}" y="${shape.y}" width="${shape.width}" height="${shape.height}"${(shape as any).rx ? ` rx="${(shape as any).rx}"` : ''}/>`
+    case 'circle': return `<circle cx="${shape.cx}" cy="${shape.cy}" r="${shape.r}"/>`
+    case 'ellipse': return `<ellipse cx="${shape.cx}" cy="${shape.cy}" rx="${shape.rx}" ry="${shape.ry}"/>`
+    case 'path': return `<path d="${shape.d}"/>`
+    case 'polygon': {
+      const pts = polygonPoints(shape.cx, shape.cy, shape.size, shape.sides, shape.innerRadius, shape.isStar)
+      return `<polygon points="${pts}"/>`
+    }
+    default: return ''
+  }
+}
+
 function shapeGeometryString(shape: Shape): string {
   switch (shape.type) {
     case 'rect':
@@ -153,6 +174,11 @@ function shapeToSVGElement(shape: Shape, allShapes?: Shape[]): string {
   const clipAttr = shape.clippedBy ? ` clip-path="url(#clip-${shape.id})"` : ''
   const transform = buildShapeTransform(shape)
 
+  const sa = (shape as any).strokeAlignment as string | undefined
+  const hasStroke = shape.strokeWidth > 0 && shape.stroke !== 'none'
+  const doubledSW = (sa === 'inside' || sa === 'outside') && hasStroke ? shape.strokeWidth * 2 : shape.strokeWidth
+  const saClipAttr = sa === 'inside' && hasStroke ? ` clip-path="url(#sa-${shape.id})"` : ''
+
   const markerStartAttr = (shape.type === 'line' || shape.type === 'path') && shape.markerStart && shape.markerStart !== 'none'
     ? ` marker-start="url(#mk-s-${shape.id})"` : ''
   const markerEndAttr = (shape.type === 'line' || shape.type === 'path') && shape.markerEnd && shape.markerEnd !== 'none'
@@ -162,7 +188,7 @@ function shapeToSVGElement(shape: Shape, allShapes?: Shape[]): string {
     `fill="${fillAttr}"`,
     shape.fillOpacity !== 1 ? `fill-opacity="${shape.fillOpacity}"` : '',
     shape.stroke !== 'none' ? `stroke="${shape.stroke}"` : 'stroke="none"',
-    shape.strokeWidth > 0 ? `stroke-width="${shape.strokeWidth}"` : '',
+    doubledSW > 0 ? `stroke-width="${doubledSW}"` : '',
     shape.strokeDasharray ? `stroke-dasharray="${shape.strokeDasharray}"` : '',
     shape.strokeLinecap && shape.strokeLinecap !== 'butt' ? `stroke-linecap="${shape.strokeLinecap}"` : '',
     shape.strokeLinejoin && shape.strokeLinejoin !== 'miter' ? `stroke-linejoin="${shape.strokeLinejoin}"` : '',
@@ -172,18 +198,34 @@ function shapeToSVGElement(shape: Shape, allShapes?: Shape[]): string {
     transform ? `transform="${transform}"` : '',
   ].filter(Boolean).join(' ')
 
+  function wrapOutside(inner: string): string {
+    if (sa !== 'outside' || !hasStroke) return inner
+    // Two elements: stroke only + fill only
+    const strokeOnly = inner.replace(`fill="${fillAttr}"`, 'fill="none"')
+    const fillOnly = inner.replace(`stroke="${shape.stroke}"`, 'stroke="none"').replace(`stroke-width="${doubledSW}"`, 'stroke-width="0"')
+    return `<g>${strokeOnly}${fillOnly}</g>`
+  }
+
   switch (shape.type) {
     case 'rect':
-    case 'frame':
-      return `<rect x="${shape.x}" y="${shape.y}" width="${shape.width}" height="${shape.height}"${(shape as any).rx ? ` rx="${(shape as any).rx}"` : ''} ${base}${clipAttr}/>`
-    case 'circle':
-      return `<circle cx="${shape.cx}" cy="${shape.cy}" r="${shape.r}" ${base}${clipAttr}/>`
-    case 'ellipse':
-      return `<ellipse cx="${shape.cx}" cy="${shape.cy}" rx="${shape.rx}" ry="${shape.ry}" ${base}${clipAttr}/>`
+    case 'frame': {
+      const inner = `<rect x="${shape.x}" y="${shape.y}" width="${shape.width}" height="${shape.height}"${(shape as any).rx ? ` rx="${(shape as any).rx}"` : ''} ${base}${clipAttr}${saClipAttr}/>`
+      return wrapOutside(inner)
+    }
+    case 'circle': {
+      const inner = `<circle cx="${shape.cx}" cy="${shape.cy}" r="${shape.r}" ${base}${clipAttr}${saClipAttr}/>`
+      return wrapOutside(inner)
+    }
+    case 'ellipse': {
+      const inner = `<ellipse cx="${shape.cx}" cy="${shape.cy}" rx="${shape.rx}" ry="${shape.ry}" ${base}${clipAttr}${saClipAttr}/>`
+      return wrapOutside(inner)
+    }
     case 'line':
       return `<line x1="${shape.x1}" y1="${shape.y1}" x2="${shape.x2}" y2="${shape.y2}" ${base}${markerStartAttr}${markerEndAttr}/>`
-    case 'path':
-      return `<path d="${shape.d}" ${base}${clipAttr}${markerStartAttr}${markerEndAttr}/>`
+    case 'path': {
+      const inner = `<path d="${shape.d}" ${base}${clipAttr}${markerStartAttr}${markerEndAttr}/>`
+      return wrapOutside(inner)
+    }
     case 'text': {
       const ls = (shape as any).letterSpacing
       const lsAttr = ls ? ` letter-spacing="${ls}"` : ''
@@ -193,10 +235,14 @@ function shapeToSVGElement(shape: Shape, allShapes?: Shape[]): string {
         return `<text font-size="${shape.fontSize}" font-family="${shape.fontFamily}" font-weight="${shape.fontWeight}"${lsAttr} ${base}${clipAttr}><textPath href="#${arcId}" startOffset="${offset}%" textAnchor="middle">${shape.text}</textPath></text>`
       }
       const charOffsets: number[] | undefined = (shape as any).charOffsets
-      if (charOffsets && charOffsets.some((v: number) => v !== 0)) {
+      const charOffsetsY: number[] | undefined = (shape as any).charOffsetsY
+      const hasOffsets = (charOffsets?.some((v: number) => v !== 0)) || (charOffsetsY?.some((v: number) => v !== 0))
+      if (hasOffsets) {
         const tspans = shape.text.split('').map((ch: string, i: number) => {
-          const dx = i === 0 ? (charOffsets[0] ?? 0) : (charOffsets[i] ?? 0) - (charOffsets[i - 1] ?? 0)
-          return dx !== 0 ? `<tspan dx="${dx}">${ch}</tspan>` : `<tspan>${ch}</tspan>`
+          const dx = i === 0 ? (charOffsets?.[0] ?? 0) : (charOffsets?.[i] ?? 0) - (charOffsets?.[i-1] ?? 0)
+          const dy = i === 0 ? (charOffsetsY?.[0] ?? 0) : (charOffsetsY?.[i] ?? 0) - (charOffsetsY?.[i-1] ?? 0)
+          const attrs = [dx !== 0 ? `dx="${dx}"` : '', dy !== 0 ? `dy="${dy}"` : ''].filter(Boolean).join(' ')
+          return attrs ? `<tspan ${attrs}>${ch}</tspan>` : `<tspan>${ch}</tspan>`
         }).join('')
         return `<text x="${shape.x}" y="${shape.y}" font-size="${shape.fontSize}" font-family="${shape.fontFamily}" font-weight="${shape.fontWeight}" text-anchor="${shape.textAnchor}"${lsAttr} ${base}${clipAttr}>${tspans}</text>`
       }
@@ -204,7 +250,8 @@ function shapeToSVGElement(shape: Shape, allShapes?: Shape[]): string {
     }
     case 'polygon': {
       const pts = polygonPoints(shape.cx, shape.cy, shape.size, shape.sides, shape.innerRadius, shape.isStar)
-      return `<polygon points="${pts}" ${base}${clipAttr}/>`
+      const inner = `<polygon points="${pts}" ${base}${clipAttr}${saClipAttr}/>`
+      return wrapOutside(inner)
     }
     default:
       return ''
@@ -270,7 +317,12 @@ export function serializeSVG(
     })
     .join('\n')
 
-  const allDefs = [gradDefs, patternDefs, filterDefs, markerDefs, clipDefs, arcPathDefs].filter(Boolean).join('\n')
+  const strokeAlignDefs = orderedShapes
+    .filter((s) => (s as any).strokeAlignment === 'inside' && s.strokeWidth > 0 && s.stroke !== 'none')
+    .map((s) => `    ${strokeAlignDefString(s)}`)
+    .join('\n')
+
+  const allDefs = [gradDefs, patternDefs, filterDefs, markerDefs, clipDefs, arcPathDefs, strokeAlignDefs].filter(Boolean).join('\n')
   const defsBlock = allDefs ? `  <defs>\n${allDefs}\n  </defs>\n` : ''
 
   const elements = orderedShapes.map((s) => `  ${shapeToSVGElement(s, shapes)}`).filter((s) => s.trim()).join('\n')

@@ -6,6 +6,8 @@ interface RulersProps {
   panY: number
   containerW: number
   containerH: number
+  onPointerDownH?: (e: React.PointerEvent<HTMLCanvasElement>) => void
+  onPointerDownV?: (e: React.PointerEvent<HTMLCanvasElement>) => void
 }
 
 const RULER_SIZE = 20
@@ -89,7 +91,7 @@ function drawRuler(
   }
 }
 
-export function Rulers({ zoom, panX, panY, containerW, containerH }: RulersProps) {
+export function Rulers({ zoom, panX, panY, containerW, containerH, onPointerDownH, onPointerDownV }: RulersProps) {
   const hRef = useRef<HTMLCanvasElement>(null)
   const vRef = useRef<HTMLCanvasElement>(null)
 
@@ -114,14 +116,18 @@ export function Rulers({ zoom, panX, panY, containerW, containerH }: RulersProps
       <canvas ref={hRef} style={{
         position: 'absolute', top: 0, left: RULER_SIZE,
         width: containerW - RULER_SIZE, height: RULER_SIZE,
-        pointerEvents: 'none', zIndex: 9,
-      }} />
+        cursor: 'crosshair', zIndex: 9,
+      }}
+        onPointerDown={onPointerDownH}
+      />
       {/* Vertical ruler */}
       <canvas ref={vRef} style={{
         position: 'absolute', top: RULER_SIZE, left: 0,
         width: RULER_SIZE, height: containerH - RULER_SIZE,
-        pointerEvents: 'none', zIndex: 9,
-      }} />
+        cursor: 'crosshair', zIndex: 9,
+      }}
+        onPointerDown={onPointerDownV}
+      />
     </>
   )
 }

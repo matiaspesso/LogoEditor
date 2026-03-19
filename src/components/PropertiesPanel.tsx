@@ -6,6 +6,9 @@ import { AlignBar } from './ui/AlignBar'
 import { GradientEditor } from './ui/GradientEditor'
 import { importSVGString } from '../utils/svgImporter'
 import { textToPath } from '../utils/textToPath'
+import { outlineStroke } from '../utils/outlineStroke'
+import { offsetShape } from '../utils/offsetPath'
+import { simplifyPath } from '../utils/simplifyPath'
 
 const DASH_PRESETS = [
   { label: 'Solid',   value: '' },
@@ -293,9 +296,57 @@ function FXPanel({ shape }: { shape: Shape }) {
   )
 }
 
+function OffsetPathControl({ shape }: { shape: Shape }) {
+  const [offsetVal, setOffsetVal] = React.useState(2)
+  const { addShape, commit } = useEditorStore()
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-2">
+        <span style={{ fontSize: 10, color: 'var(--text-dim)', width: 48, flexShrink: 0 }}>Offset</span>
+        <input type="number" className="input-field" value={offsetVal} step={0.5}
+          onChange={(e) => setOffsetVal(parseFloat(e.target.value) || 0)} style={{ flex: 1 }} />
+        <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>px</span>
+      </div>
+      <button
+        style={{ width: '100%', padding: '4px 0', background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-dim)', fontSize: 10, cursor: 'pointer' }}
+        onClick={() => {
+          const delta = offsetShape(shape, offsetVal)
+          if (!delta) return
+          addShape({ ...shape, ...delta, name: shape.name + ' (offset)' } as any)
+          commit()
+        }}
+      >
+        Offset Path ({offsetVal > 0 ? '+' : ''}{offsetVal})
+      </button>
+    </div>
+  )
+}
+
+function SimplifyPathControl({ shape }: { shape: { id: string; type: 'path'; d: string } & Shape }) {
+  const [tolerance, setTolerance] = React.useState(0.5)
+  const { updateShape, commit } = useEditorStore()
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-2">
+        <span style={{ fontSize: 10, color: 'var(--text-dim)', width: 48, flexShrink: 0 }}>Tolerance</span>
+        <input type="range" min={0.1} max={10} step={0.1} value={tolerance}
+          onChange={(e) => setTolerance(parseFloat(e.target.value))}
+          style={{ flex: 1, accentColor: 'var(--accent)' }} />
+        <span style={{ fontSize: 10, color: 'var(--text-dim)', width: 24, textAlign: 'right' }}>{tolerance}</span>
+      </div>
+      <button
+        style={{ width: '100%', padding: '4px 0', background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-dim)', fontSize: 10, cursor: 'pointer' }}
+        onClick={() => { updateShape(shape.id, { d: simplifyPath(shape.d, tolerance) } as any); commit() }}
+      >
+        Simplify Path
+      </button>
+    </div>
+  )
+}
+
 function ShapeProperties({ shape }: { shape: Shape }) {
   const store = useEditorStore()
-  const { updateShape, commit, reorderLayer, flipShapes } = store
+  const { updateShape, commit, reorderLayer, flipShapes, alignShapes, swatches, addSwatch, removeSwatch, snapEnabled, setSnap, gridEnabled, gridSize, setGrid } = store
 
   const update = (partial: Partial<Shape>) => {
     updateShape(shape.id, partial)
@@ -408,6 +459,20 @@ function ShapeProperties({ shape }: { shape: Shape }) {
           </button>
         </div>
 
+        {/* Align to canvas */}
+        <div style={{ marginTop: 8 }}>
+          <div className="panel-label" style={{ marginBottom: 4 }}>Align to Canvas</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 3 }}>
+            {[['left','⇤'],['center-h','↔'],['right','⇥'],['top','⇡'],['center-v','↕'],['bottom','⇣']].map(([t,l]) => (
+              <button key={t} title={`${t} to canvas`}
+                onClick={() => alignShapes(t as any, 'canvas')}
+                style={{ padding: '4px 0', borderRadius: 4, border: '1px solid var(--border)', background: 'rgba(255,255,255,0.04)', cursor: 'pointer', fontSize: 13, color: 'var(--text)' }}>
+                {l}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* Skew / Deform */}
         <div style={{ marginTop: 10 }}>
           <div className="panel-label" style={{ marginBottom: 4 }}>Deform</div>
@@ -491,6 +556,28 @@ function ShapeProperties({ shape }: { shape: Shape }) {
         </div>
       </div>
 
+      {/* Swatches */}
+      <div className="panel-section">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+          <span className="panel-label" style={{ margin: 0, flex: 1 }}>Swatches</span>
+          <button title="Save fill color as swatch"
+            onClick={() => addSwatch(shape.fill)}
+            style={{ fontSize: 14, width: 20, height: 20, borderRadius: 3, border: '1px solid var(--border)', background: 'rgba(255,255,255,0.06)', cursor: 'pointer', color: 'var(--text-dim)', lineHeight: '18px', padding: 0 }}>
+            +
+          </button>
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+          {swatches.map((color, i) => (
+            <button key={i}
+              title={`${color} · click=fill · shift+click=stroke · right-click=remove`}
+              onClick={(e) => { if (e.shiftKey) update({ stroke: color }); else update({ fill: color }) }}
+              onContextMenu={(e) => { e.preventDefault(); removeSwatch(color) }}
+              style={{ width: 18, height: 18, borderRadius: 3, border: '1px solid rgba(255,255,255,0.1)', background: color, cursor: 'pointer', padding: 0, flexShrink: 0 }}
+            />
+          ))}
+        </div>
+      </div>
+
       {/* Stroke */}
       <div className="panel-section">
         <div className="panel-label">Stroke</div>
@@ -505,6 +592,42 @@ function ShapeProperties({ shape }: { shape: Shape }) {
           onCommit={commit}
         />
         <NumInput label="Width" value={shape.strokeWidth} onChange={(v) => update({ strokeWidth: Math.max(0, v) })} min={0} step={0.5} />
+
+        {/* Stroke alignment */}
+        <div className="flex items-center gap-2 mb-1" style={{ marginTop: 4 }}>
+          <span className="panel-label" style={{ margin: 0, width: 48, flexShrink: 0 }}>Align</span>
+          <div style={{ display: 'flex', gap: 3, flex: 1 }}>
+            {(['center', 'inside', 'outside'] as const).map((a) => (
+              <button key={a}
+                onClick={() => update({ strokeAlignment: a } as any)}
+                title={`Stroke ${a}`}
+                style={{ flex: 1, padding: '3px 0', fontSize: 9, borderRadius: 4, cursor: 'pointer',
+                  border: `1px solid ${((shape as any).strokeAlignment ?? 'center') === a ? 'var(--accent)' : 'var(--border)'}`,
+                  background: ((shape as any).strokeAlignment ?? 'center') === a ? 'rgba(233,69,96,0.15)' : 'rgba(255,255,255,0.04)',
+                  color: 'var(--text-dim)' }}>
+                {a === 'center' ? '⊃⊂' : a === 'inside' ? '⊂' : '⊃'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Outline Stroke */}
+        {shape.strokeWidth > 0 && shape.stroke !== 'none' && (
+          <button
+            style={{ marginTop: 4, width: '100%', padding: '4px 0', background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-dim)', fontSize: 10, cursor: 'pointer' }}
+            title="Convert stroke to a filled path shape"
+            onClick={() => {
+              const result = outlineStroke(shape)
+              if (!result) return
+              const s = useEditorStore.getState()
+              s.addShape({ ...shape, type: 'path', d: result.d, fill: result.fill, stroke: 'none', strokeWidth: 0, name: shape.name + ' (outline)' } as any)
+              s.updateShape(shape.id, { stroke: 'none', strokeWidth: 0 } as any)
+              s.commit()
+            }}
+          >
+            Outline Stroke →
+          </button>
+        )}
 
         {/* Dash style */}
         <div className="flex items-center gap-2 mb-1" style={{ marginTop: 6 }}>
@@ -697,11 +820,11 @@ function ShapeProperties({ shape }: { shape: Shape }) {
           </div>
 
           {/* Per-character offsets */}
-          {!!(shape as any).charOffsets?.some((v: number) => v !== 0) && (
+          {(!!(shape as any).charOffsets?.some((v: number) => v !== 0) || !!(shape as any).charOffsetsY?.some((v: number) => v !== 0)) && (
             <div style={{ marginTop: 4 }}>
               <button
                 style={{ width: '100%', padding: '3px 0', background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-dim)', fontSize: 10, cursor: 'pointer' }}
-                onClick={() => update({ charOffsets: undefined } as any)}
+                onClick={() => update({ charOffsets: undefined, charOffsetsY: undefined } as any)}
               >
                 Reset character offsets
               </button>
@@ -772,6 +895,37 @@ function ShapeProperties({ shape }: { shape: Shape }) {
         </div>
       )}
 
+      {/* Path Operations */}
+      {(shape.type === 'rect' || shape.type === 'frame' || shape.type === 'circle' || shape.type === 'ellipse' || shape.type === 'polygon' || shape.type === 'path') && (
+        <div className="panel-section">
+          <div className="panel-label">Path Operations</div>
+          {shape.type !== 'path' && <OffsetPathControl shape={shape} />}
+          {shape.type === 'path' && <SimplifyPathControl shape={shape as any} />}
+        </div>
+      )}
+
+      {/* Snap to grid */}
+      <div className="panel-section">
+        <div className="panel-label">Grid</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          <input type="checkbox" id="snap-props" checked={snapEnabled} onChange={(e) => setSnap(e.target.checked)} />
+          <label htmlFor="snap-props" style={{ fontSize: 12, color: 'var(--text-dim)', cursor: 'pointer' }}>Snap to grid</label>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input type="checkbox" id="grid-props" checked={gridEnabled} onChange={(e) => setGrid(gridSize, e.target.checked)} />
+          <label htmlFor="grid-props" style={{ fontSize: 12, color: 'var(--text-dim)', cursor: 'pointer' }}>Show grid</label>
+          <input
+            type="number"
+            min={1}
+            max={128}
+            value={gridSize}
+            onChange={(e) => setGrid(Math.max(1, parseInt(e.target.value) || 1), gridEnabled)}
+            style={{ width: 44, marginLeft: 'auto', background: 'var(--input-bg)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)', padding: '2px 4px', fontSize: 11 }}
+          />
+          <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>px</span>
+        </div>
+      </div>
+
       {/* Clip mask status */}
       {shape.clippedBy && (
         <div className="panel-section">
@@ -835,6 +989,7 @@ const BOOL_OPS = [
 function MultiSelectPanel({ selectedShapes, selectedIds }: { selectedShapes: Shape[]; selectedIds: string[] }) {
   const store = useEditorStore()
   const { updateShape, commit, alignShapes, layerOrder } = store
+  const [alignRef, setAlignRef] = useState<'selection' | 'canvas'>('selection')
 
   function updateAll(partial: Partial<Shape>) {
     selectedIds.forEach((id) => updateShape(id, partial))
@@ -856,8 +1011,19 @@ function MultiSelectPanel({ selectedShapes, selectedIds }: { selectedShapes: Sha
 
       {/* Align bar */}
       <div className="panel-label" style={{ marginBottom: 4 }}>Align</div>
+      <div style={{ display: 'flex', gap: 3, marginBottom: 6 }}>
+        {(['selection', 'canvas'] as const).map((ref) => (
+          <button key={ref} onClick={() => setAlignRef(ref)}
+            style={{ flex: 1, padding: '3px 0', fontSize: 9, borderRadius: 4, cursor: 'pointer',
+              border: `1px solid ${alignRef === ref ? 'var(--accent)' : 'var(--border)'}`,
+              background: alignRef === ref ? 'rgba(233,69,96,0.15)' : 'rgba(255,255,255,0.04)',
+              color: 'var(--text-dim)' }}>
+            {ref === 'selection' ? 'Selection' : 'Canvas'}
+          </button>
+        ))}
+      </div>
       <AlignBar
-        onAlign={(type) => alignShapes(type as any)}
+        onAlign={(type) => alignShapes(type as any, alignRef === 'canvas' ? 'canvas' : undefined)}
         canDistribute={selectedShapes.length >= 3}
       />
 

@@ -115,7 +115,9 @@ export function SVGCanvas() {
     canvasSize, gridSize, snapEnabled, zoom, panX, panY,
     gridEnabled, drawing, setDrawing, addShape, updateShape, setSelectedIds,
     selectShape, clearSelection, setDrag, drag, commit, setEditingTextId, editingTextId,
-    draggingPreset, setDraggingPreset,
+    draggingPreset, setDraggingPreset, setActiveTool,
+    guides, removeGuide, updateGuide,
+    artboards, activeArtboardId,
   } = store
 
   const orderedShapes = layerOrder
@@ -138,6 +140,17 @@ export function SVGCanvas() {
   // Handle pointer down on canvas background
   const handleCanvasPointerDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return
+
+    if (activeTool === 'eyedropper') {
+      const bg = store.backgroundColor
+      if (bg !== 'transparent' && selectedIds.length > 0) {
+        selectedIds.forEach((sid) => updateShape(sid, { fill: bg }))
+        commit()
+      }
+      setActiveTool('select')
+      return
+    }
+
     const pt = toCanvas(e)
     const snapped = snapXY(pt.x, pt.y)
     pointerDownRef.current = { svgX: snapped.x, svgY: snapped.y, pointerId: e.pointerId }
@@ -194,6 +207,18 @@ export function SVGCanvas() {
 
   // Handle pointer down on shape (for selection + move)
   const handleShapePointerDown = useCallback((e: React.PointerEvent, id: string) => {
+    if (activeTool === 'eyedropper') {
+      e.stopPropagation()
+      const sourceShape = shapes.find((s) => s.id === id)
+      if (sourceShape && selectedIds.length > 0) {
+        selectedIds.forEach((sid) => updateShape(sid, { fill: sourceShape.fill }))
+        commit()
+      } else if (sourceShape) {
+        setSelectedIds([id])
+      }
+      setActiveTool('select')
+      return
+    }
     if (activeTool !== 'select') return
     e.stopPropagation()
     // Don't drag locked shapes
@@ -638,22 +663,29 @@ export function SVGCanvas() {
         svgPasteOffset += 8
         setSelectedIds(newIds)
       }
-      // Character offset editing — Alt+Left/Right nudges selected char
-      if (charEditId && e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      // Character offset editing — Alt+Left/Right/Up/Down nudges selected char
+      if (charEditId && e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
         e.preventDefault()
         const store = useEditorStore.getState()
         const shape = store.shapes.find((s) => s.id === charEditId)
         if (shape?.type === 'text') {
-          const delta = e.key === 'ArrowRight' ? 1 : -1
-          const offsets: number[] = [...((shape as any).charOffsets ?? Array(shape.text.length).fill(0))]
-          while (offsets.length < shape.text.length) offsets.push(0)
-          offsets[selectedCharIndex] = (offsets[selectedCharIndex] ?? 0) + delta
-          store.updateShape(charEditId, { charOffsets: offsets } as any)
+          if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+            const delta = e.key === 'ArrowRight' ? 1 : -1
+            const offsets: number[] = [...((shape as any).charOffsets ?? Array(shape.text.length).fill(0))]
+            while (offsets.length < shape.text.length) offsets.push(0)
+            offsets[selectedCharIndex] = (offsets[selectedCharIndex] ?? 0) + delta
+            store.updateShape(charEditId, { charOffsets: offsets } as any)
+          } else {
+            const delta = e.key === 'ArrowDown' ? 1 : -1
+            const offsets: number[] = [...((shape as any).charOffsetsY ?? Array(shape.text.length).fill(0))]
+            while (offsets.length < shape.text.length) offsets.push(0)
+            offsets[selectedCharIndex] = (offsets[selectedCharIndex] ?? 0) + delta
+            store.updateShape(charEditId, { charOffsetsY: offsets } as any)
+          }
           store.commit()
         }
         return
       }
-      // Alt+Up/Down adjusts vertical spacing for selected character (via dy stored separately, skip for now)
       // Tab / Shift+Tab moves to next/prev character in char edit mode
       if (charEditId && e.key === 'Tab') {
         e.preventDefault()
@@ -924,6 +956,19 @@ export function SVGCanvas() {
           })}
         </defs>
 
+        {/* Artboards */}
+        {artboards.map((ab) => (
+          <g key={ab.id} pointerEvents="none">
+            <rect x={ab.x} y={ab.y} width={ab.width} height={ab.height}
+              fill="none"
+              stroke={activeArtboardId === ab.id ? 'rgba(100,160,255,0.9)' : 'rgba(100,100,200,0.35)'}
+              strokeWidth={1 / zoom} />
+            <text x={ab.x} y={ab.y - 3 / zoom}
+              fontSize={9 / zoom} fill={activeArtboardId === ab.id ? 'rgba(100,160,255,0.9)' : 'rgba(100,100,200,0.6)'}
+              fontFamily="monospace">{ab.name}</text>
+          </g>
+        ))}
+
         {orderedShapes.map((shape) => {
           const clipSource = shape.clippedBy ? shapes.find((s) => s.id === shape.clippedBy) : undefined
           return (
@@ -1078,64 +1123,147 @@ export function SVGCanvas() {
           const shape = shapes.find((s) => s.id === charEditId)
           if (!shape || shape.type !== 'text') return null
           const charOffsets: number[] = (shape as any).charOffsets ?? Array(shape.text.length).fill(0)
+          const charOffsetsY: number[] = (shape as any).charOffsetsY ?? Array(shape.text.length).fill(0)
           // Estimate natural char positions using canvas measureText
           const cvs = document.createElement('canvas')
           const ctx = cvs.getContext('2d')!
           ctx.font = `${shape.fontWeight} ${shape.fontSize}px ${shape.fontFamily}`
           const naturalX: number[] = []
-          let cx = 0
+          const charWidths: number[] = []
+          let totalW = 0
           for (const ch of shape.text) {
-            naturalX.push(cx)
-            cx += ctx.measureText(ch).width + ((shape as any).letterSpacing ?? 0)
+            naturalX.push(totalW)
+            const w = ctx.measureText(ch).width + ((shape as any).letterSpacing ?? 0)
+            charWidths.push(w)
+            totalW += w
           }
-          const baseX = shape.textAnchor === 'middle' ? shape.x - cx / 2
-            : shape.textAnchor === 'end' ? shape.x - cx
+          const hr = 3.5 / zoom
+
+          // Arc text handles
+          if (shape.textOnArc) {
+            const r = (shape as any).arcRadius ?? shape.fontSize * 3
+            const arcOffset = (shape as any).arcOffset ?? 50
+            const isDown = (shape as any).arcDirection === 'down'
+            const arcLen = Math.PI * r
+            const arcCenter = (arcOffset / 100) * arcLen
+            return (
+              <g pointerEvents="all">
+                <text x={shape.x - r} y={isDown ? shape.y + r + 14 / zoom : shape.y - r - 7 / zoom}
+                  fontSize={7 / zoom} fill="rgba(100,160,255,0.9)" fontFamily="monospace"
+                  pointerEvents="none">
+                  char edit · Tab=next · Alt+←→↑↓=nudge · Esc=exit
+                </text>
+                {shape.text.split('').map((ch, i) => {
+                  const arcDist = arcCenter + naturalX[i] + (charOffsets[i] ?? 0) - totalW / 2 + charWidths[i] / 2
+                  const t = Math.max(0, Math.min(1, arcDist / arcLen))
+                  const angle = Math.PI * t
+                  const cY = charOffsetsY[i] ?? 0
+                  // effective radius after Y offset (positive cY = inward = smaller effective r)
+                  const effR = r - cY
+                  const hx = shape.x - effR * Math.cos(angle)
+                  const hy = isDown
+                    ? shape.y + effR * Math.sin(angle)
+                    : shape.y - effR * Math.sin(angle)
+                  const isSelected = selectedCharIndex === i
+                  // tangent and toward-center unit vectors for drag decomposition
+                  const tx = Math.sin(angle)
+                  const ty = isDown ? Math.cos(angle) : -Math.cos(angle)
+                  const cx2 = Math.cos(angle)      // toward-center x
+                  const cy2 = isDown ? -Math.sin(angle) : Math.sin(angle)  // toward-center y
+                  return (
+                    <circle key={i} cx={hx} cy={hy} r={hr}
+                      fill={isSelected ? '#e94560' : 'rgba(100,160,255,0.7)'}
+                      stroke="#fff" strokeWidth={0.8 / zoom}
+                      style={{ cursor: 'move' }}
+                      onPointerDown={(e) => {
+                        e.stopPropagation()
+                        setSelectedCharIndex(i)
+                        const startPt = toCanvas(e)
+                        const startOffX = charOffsets[i] ?? 0
+                        const startOffY = charOffsetsY[i] ?? 0
+                        ;(e.currentTarget as SVGElement).closest('svg')?.parentElement?.setPointerCapture(e.pointerId)
+                        const onMove = (ev: PointerEvent) => {
+                          const pt = toCanvas(ev as unknown as React.PointerEvent)
+                          const dx = pt.x - startPt.x
+                          const dy = pt.y - startPt.y
+                          const dTangent = dx * tx + dy * ty
+                          const dCenter = dx * cx2 + dy * cy2
+                          const newOffsetsX = [...charOffsets]
+                          while (newOffsetsX.length < shape.text.length) newOffsetsX.push(0)
+                          newOffsetsX[i] = startOffX + dTangent
+                          const newOffsetsY = [...charOffsetsY]
+                          while (newOffsetsY.length < shape.text.length) newOffsetsY.push(0)
+                          newOffsetsY[i] = startOffY + dCenter
+                          updateShape(charEditId!, { charOffsets: newOffsetsX, charOffsetsY: newOffsetsY } as any)
+                        }
+                        const onUp = () => {
+                          commit()
+                          window.removeEventListener('pointermove', onMove)
+                          window.removeEventListener('pointerup', onUp)
+                        }
+                        window.addEventListener('pointermove', onMove)
+                        window.addEventListener('pointerup', onUp)
+                      }}
+                    />
+                  )
+                })}
+              </g>
+            )
+          }
+
+          // Normal text handles
+          const baseX = shape.textAnchor === 'middle' ? shape.x - totalW / 2
+            : shape.textAnchor === 'end' ? shape.x - totalW
             : shape.x
           const baseY = shape.y
-          const hr = 3.5 / zoom
           return (
             <g pointerEvents="all">
               {/* Indicator label */}
               <text x={baseX} y={baseY - shape.fontSize - 4 / zoom}
                 fontSize={7 / zoom} fill="rgba(100,160,255,0.9)" fontFamily="monospace"
                 pointerEvents="none">
-                char edit · Tab=next · Alt+←→=nudge · Esc=exit
+                char edit · Tab=next · Alt+←→↑↓=nudge · Esc=exit
               </text>
               {shape.text.split('').map((ch, i) => {
                 const xPos = baseX + naturalX[i] + (charOffsets[i] ?? 0)
+                const yOff = charOffsetsY[i] ?? 0
                 const isSelected = selectedCharIndex === i
                 return (
                   <g key={i}>
                     {/* Highlight box */}
                     <rect
-                      x={xPos - 1 / zoom} y={baseY - shape.fontSize - 1 / zoom}
-                      width={ctx.measureText(ch).width + 2 / zoom} height={shape.fontSize + 2 / zoom}
+                      x={xPos - 1 / zoom} y={baseY - shape.fontSize - 1 / zoom + yOff}
+                      width={charWidths[i] + 2 / zoom} height={shape.fontSize + 2 / zoom}
                       fill={isSelected ? 'rgba(233,69,96,0.2)' : 'rgba(100,160,255,0.1)'}
                       stroke={isSelected ? '#e94560' : 'rgba(100,160,255,0.5)'}
                       strokeWidth={0.8 / zoom}
                       style={{ cursor: 'pointer' }}
                       onPointerDown={(e) => { e.stopPropagation(); setSelectedCharIndex(i) }}
                     />
-                    {/* Top handle for dragging */}
+                    {/* Handle for dragging (2D) */}
                     <circle
-                      cx={xPos + ctx.measureText(ch).width / 2}
-                      cy={baseY - shape.fontSize - 5 / zoom}
+                      cx={xPos + charWidths[i] / 2}
+                      cy={baseY - shape.fontSize - 5 / zoom + yOff}
                       r={hr}
                       fill={isSelected ? '#e94560' : 'rgba(100,160,255,0.7)'}
                       stroke="#fff" strokeWidth={0.8 / zoom}
-                      style={{ cursor: 'ew-resize' }}
+                      style={{ cursor: 'move' }}
                       onPointerDown={(e) => {
                         e.stopPropagation()
                         setSelectedCharIndex(i)
-                        const startX = toCanvas(e).x
-                        const startOffset = charOffsets[i] ?? 0
+                        const startPt = toCanvas(e)
+                        const startOffX = charOffsets[i] ?? 0
+                        const startOffY = charOffsetsY[i] ?? 0
                         ;(e.currentTarget as SVGElement).closest('svg')?.parentElement?.setPointerCapture(e.pointerId)
                         const onMove = (ev: PointerEvent) => {
-                          const dx = toCanvas(ev as unknown as React.PointerEvent).x - startX
-                          const newOffsets = [...charOffsets]
-                          while (newOffsets.length < shape.text.length) newOffsets.push(0)
-                          newOffsets[i] = startOffset + dx
-                          updateShape(charEditId!, { charOffsets: newOffsets } as any)
+                          const pt = toCanvas(ev as unknown as React.PointerEvent)
+                          const newOffsetsX = [...charOffsets]
+                          while (newOffsetsX.length < shape.text.length) newOffsetsX.push(0)
+                          newOffsetsX[i] = startOffX + (pt.x - startPt.x)
+                          const newOffsetsY = [...charOffsetsY]
+                          while (newOffsetsY.length < shape.text.length) newOffsetsY.push(0)
+                          newOffsetsY[i] = startOffY + (pt.y - startPt.y)
+                          updateShape(charEditId!, { charOffsets: newOffsetsX, charOffsetsY: newOffsetsY } as any)
                         }
                         const onUp = () => {
                           commit()
@@ -1180,6 +1308,110 @@ export function SVGCanvas() {
               }}
             />
           )
+        })()}
+
+        {/* Guides */}
+        {guides.map((g) => {
+          const isH = g.type === 'h'
+          return (
+            <line key={g.id}
+              x1={isH ? -99999 : g.position} y1={isH ? g.position : -99999}
+              x2={isH ? 99999 : g.position} y2={isH ? g.position : 99999}
+              stroke="rgba(0,160,255,0.7)" strokeWidth={0.8 / zoom}
+              strokeDasharray={`${4/zoom} ${3/zoom}`}
+              pointerEvents="stroke"
+              style={{ cursor: isH ? 'ns-resize' : 'ew-resize' }}
+              onPointerDown={(e) => {
+                e.stopPropagation()
+                ;(e.currentTarget as SVGElement).setPointerCapture(e.pointerId)
+                const onMove = (ev: PointerEvent) => {
+                  const pt = toCanvas(ev as unknown as React.PointerEvent)
+                  updateGuide(g.id, isH ? pt.y : pt.x)
+                }
+                const onUp = () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp) }
+                window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', onUp)
+              }}
+              onDoubleClick={(e) => { e.stopPropagation(); removeGuide(g.id) }}
+            />
+          )
+        })}
+
+        {/* Gradient handles */}
+        {activeTool === 'select' && selectedIds.length === 1 && !drag && (() => {
+          const gradShape = shapes.find((s) => s.id === selectedIds[0])
+          if (!gradShape?.gradientFill) return null
+          const gf = gradShape.gradientFill
+          const bbox = getShapeBBox(gradShape)
+          const hr = 4 / zoom
+
+          if (gf.type === 'linear') {
+            const rad = (gf.angle * Math.PI) / 180
+            const fx1 = gf.x1 ?? (0.5 - 0.5 * Math.cos(rad))
+            const fy1 = gf.y1 ?? (0.5 - 0.5 * Math.sin(rad))
+            const fx2 = gf.x2 ?? (0.5 + 0.5 * Math.cos(rad))
+            const fy2 = gf.y2 ?? (0.5 + 0.5 * Math.sin(rad))
+            const p1 = { x: bbox.x + fx1 * bbox.width, y: bbox.y + fy1 * bbox.height }
+            const p2 = { x: bbox.x + fx2 * bbox.width, y: bbox.y + fy2 * bbox.height }
+
+            const makeHandle = (which: 'start' | 'end') => {
+              const isStart = which === 'start'
+              const pt = isStart ? p1 : p2
+              const color = isStart ? (gf.stops[0]?.color ?? '#fff') : (gf.stops[gf.stops.length-1]?.color ?? '#000')
+              return (
+                <circle key={which} cx={pt.x} cy={pt.y} r={hr}
+                  fill={color} stroke="white" strokeWidth={1.5/zoom}
+                  style={{ cursor: 'move' }}
+                  onPointerDown={(e) => {
+                    e.stopPropagation()
+                    ;(e.currentTarget as SVGElement).setPointerCapture(e.pointerId)
+                    const onMove = (ev: PointerEvent) => {
+                      const p = toCanvas(ev as unknown as React.PointerEvent)
+                      const nx = (p.x - bbox.x) / (bbox.width || 1)
+                      const ny = (p.y - bbox.y) / (bbox.height || 1)
+                      if (isStart) updateShape(gradShape.id, { gradientFill: { ...gf, x1: nx, y1: ny } } as any)
+                      else updateShape(gradShape.id, { gradientFill: { ...gf, x2: nx, y2: ny } } as any)
+                    }
+                    const onUp = () => { commit(); window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp) }
+                    window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', onUp)
+                  }}
+                />
+              )
+            }
+
+            return (
+              <g pointerEvents="all">
+                <line x1={p1.x} y1={p1.y} x2={p2.x} y2={p2.y} stroke="rgba(255,255,255,0.5)" strokeWidth={1/zoom} strokeDasharray={`${3/zoom} ${2/zoom}`} pointerEvents="none" />
+                {makeHandle('start')}
+                {makeHandle('end')}
+              </g>
+            )
+          }
+
+          if (gf.type === 'radial') {
+            const cx = (gf.cx ?? 0.5) * bbox.width + bbox.x
+            const cy = (gf.cy ?? 0.5) * bbox.height + bbox.y
+            const er = Math.min(bbox.width, bbox.height) * 0.5
+            return (
+              <g pointerEvents="all">
+                <circle cx={cx} cy={cy} r={er} fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth={1/zoom} strokeDasharray={`${3/zoom} ${2/zoom}`} pointerEvents="none" />
+                <circle cx={cx} cy={cy} r={hr}
+                  fill={gf.stops[0]?.color ?? '#fff'} stroke="white" strokeWidth={1.5/zoom}
+                  style={{ cursor: 'move' }}
+                  onPointerDown={(e) => {
+                    e.stopPropagation()
+                    ;(e.currentTarget as SVGElement).setPointerCapture(e.pointerId)
+                    const onMove = (ev: PointerEvent) => {
+                      const p = toCanvas(ev as unknown as React.PointerEvent)
+                      updateShape(gradShape.id, { gradientFill: { ...gf, cx: (p.x - bbox.x) / (bbox.width || 1), cy: (p.y - bbox.y) / (bbox.height || 1) } } as any)
+                    }
+                    const onUp = () => { commit(); window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp) }
+                    window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', onUp)
+                  }}
+                />
+              </g>
+            )
+          }
+          return null
         })()}
 
         {/* Smart snap guides */}

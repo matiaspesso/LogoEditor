@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
 import { nanoid } from 'nanoid'
-import type { Shape, ToolType, BBox } from '../types/shapes'
+import type { Shape, ToolType, BBox, Guide, Artboard } from '../types/shapes'
 import type { ShapePreset } from '../data/shapePresets'
 import { getShapeBBox, moveShape } from '../utils/geometry'
 import { applyBooleanOp, type BooleanOpType } from '../utils/booleanOps'
@@ -56,6 +56,10 @@ interface EditorState {
   editingTextId: string | null
   backgroundColor: string
   draggingPreset: ShapePreset | null
+  swatches: string[]
+  guides: Guide[]
+  artboards: Artboard[]
+  activeArtboardId: string | null
 
   // Actions
   addShape: (shape: Omit<Shape, 'id'>) => string
@@ -80,7 +84,7 @@ interface EditorState {
   setEditingTextId: (id: string | null) => void
   setBackgroundColor: (color: string) => void
   setDraggingPreset: (preset: ShapePreset | null) => void
-  alignShapes: (type: 'left' | 'center-h' | 'right' | 'top' | 'center-v' | 'bottom' | 'distribute-h' | 'distribute-v') => void
+  alignShapes: (type: string, reference?: 'canvas') => void
   flipShapes: (ids: string[], axis: 'x' | 'y') => void
   booleanOp: (ids: string[], op: BooleanOpType) => void
   groupShapes: (ids: string[]) => void
@@ -92,6 +96,16 @@ interface EditorState {
   undo: () => void
   redo: () => void
   loadShapes: (shapes: Shape[], layerOrder: string[]) => void
+  addSwatch: (color: string) => void
+  removeSwatch: (color: string) => void
+  setSwatches: (s: string[]) => void
+  addGuide: (g: Guide) => void
+  removeGuide: (id: string) => void
+  updateGuide: (id: string, position: number) => void
+  addArtboard: (a: Omit<Artboard, 'id'>) => void
+  removeArtboard: (id: string) => void
+  updateArtboard: (id: string, partial: Partial<Artboard>) => void
+  setActiveArtboard: (id: string | null) => void
 }
 
 export const useEditorStore = create<EditorState>()(
@@ -117,6 +131,10 @@ export const useEditorStore = create<EditorState>()(
     editingTextId: null,
     backgroundColor: 'transparent',
     draggingPreset: null,
+    swatches: ['#e94560','#f5c842','#6c3ac4','#1a8fe3','#22c55e','#f97316','#ef4444','#8b5cf6','#06b6d4','#84cc16','#f43f5e','#0ea5e9','#10b981','#fb923c','#ffffff','#000000','#374151','#6b7280'],
+    guides: [],
+    artboards: [],
+    activeArtboardId: null,
 
     addShape: (shapeData) => {
       const id = nanoid(8)
@@ -231,23 +249,25 @@ export const useEditorStore = create<EditorState>()(
       get().commit()
     },
 
-    alignShapes: (type) => {
-      const { shapes, selectedIds } = get()
+    alignShapes: (type, reference?) => {
+      const { shapes, selectedIds, canvasSize } = get()
       const selected = shapes.filter((s) => selectedIds.includes(s.id))
-      if (selected.length < 2) return
+      if (selected.length === 0) return
+      if (selected.length < 2 && reference !== 'canvas') return
       const bboxes = selected.map((s) => ({ shape: s, bbox: getShapeBBox(s) }))
-      const minX = Math.min(...bboxes.map((b) => b.bbox.x))
-      const maxX = Math.max(...bboxes.map((b) => b.bbox.x + b.bbox.width))
-      const minY = Math.min(...bboxes.map((b) => b.bbox.y))
-      const maxY = Math.max(...bboxes.map((b) => b.bbox.y + b.bbox.height))
-      const selW = maxX - minX
-      const selH = maxY - minY
+
+      const refX = reference === 'canvas' ? 0 : Math.min(...bboxes.map((b) => b.bbox.x))
+      const refY = reference === 'canvas' ? 0 : Math.min(...bboxes.map((b) => b.bbox.y))
+      const refW = reference === 'canvas' ? canvasSize.width : (Math.max(...bboxes.map((b) => b.bbox.x + b.bbox.width)) - refX)
+      const refH = reference === 'canvas' ? canvasSize.height : (Math.max(...bboxes.map((b) => b.bbox.y + b.bbox.height)) - refY)
+
       set((s) => {
         if (type === 'distribute-h') {
+          if (bboxes.length < 2) return
           const sorted = [...bboxes].sort((a, b) => a.bbox.x - b.bbox.x)
           const totalW = sorted.reduce((acc, b) => acc + b.bbox.width, 0)
-          const spacing = (selW - totalW) / (sorted.length - 1)
-          let curX = minX
+          const spacing = (refW - totalW) / (sorted.length - 1)
+          let curX = refX
           sorted.forEach((item) => {
             const dx = curX - item.bbox.x
             const delta = moveShape(item.shape, dx, 0)
@@ -256,10 +276,11 @@ export const useEditorStore = create<EditorState>()(
             curX += item.bbox.width + spacing
           })
         } else if (type === 'distribute-v') {
+          if (bboxes.length < 2) return
           const sorted = [...bboxes].sort((a, b) => a.bbox.y - b.bbox.y)
           const totalH = sorted.reduce((acc, b) => acc + b.bbox.height, 0)
-          const spacing = (selH - totalH) / (sorted.length - 1)
-          let curY = minY
+          const spacing = (refH - totalH) / (sorted.length - 1)
+          let curY = refY
           sorted.forEach((item) => {
             const dy = curY - item.bbox.y
             const delta = moveShape(item.shape, 0, dy)
@@ -270,12 +291,12 @@ export const useEditorStore = create<EditorState>()(
         } else {
           bboxes.forEach((item) => {
             let dx = 0, dy = 0
-            if (type === 'left') dx = minX - item.bbox.x
-            else if (type === 'right') dx = (maxX - item.bbox.width) - item.bbox.x
-            else if (type === 'center-h') dx = (minX + selW / 2 - item.bbox.width / 2) - item.bbox.x
-            else if (type === 'top') dy = minY - item.bbox.y
-            else if (type === 'bottom') dy = (maxY - item.bbox.height) - item.bbox.y
-            else if (type === 'center-v') dy = (minY + selH / 2 - item.bbox.height / 2) - item.bbox.y
+            if (type === 'left') dx = refX - item.bbox.x
+            else if (type === 'right') dx = (refX + refW - item.bbox.width) - item.bbox.x
+            else if (type === 'center-h') dx = (refX + refW / 2 - item.bbox.width / 2) - item.bbox.x
+            else if (type === 'top') dy = refY - item.bbox.y
+            else if (type === 'bottom') dy = (refY + refH - item.bbox.height) - item.bbox.y
+            else if (type === 'center-v') dy = (refY + refH / 2 - item.bbox.height / 2) - item.bbox.y
             const delta = moveShape(item.shape, dx, dy)
             const idx = s.shapes.findIndex((sh) => sh.id === item.shape.id)
             if (idx !== -1) Object.assign(s.shapes[idx], delta)
@@ -376,8 +397,21 @@ export const useEditorStore = create<EditorState>()(
       try { localStorage.removeItem('iconforge-state') } catch { /* */ }
     },
 
+    addSwatch: (color) => set((s) => { if (color && color !== 'none' && !s.swatches.includes(color)) s.swatches.push(color) }),
+    removeSwatch: (color) => set((s) => { s.swatches = s.swatches.filter((c) => c !== color) }),
+    setSwatches: (swatchList) => set((s) => { s.swatches = swatchList }),
+
+    addGuide: (g) => set((s) => { s.guides.push(g) }),
+    removeGuide: (id) => set((s) => { s.guides = s.guides.filter((g) => g.id !== id) }),
+    updateGuide: (id, position) => set((s) => { const g = s.guides.find((g) => g.id === id); if (g) g.position = position }),
+
+    addArtboard: (a) => set((s) => { s.artboards.push({ ...a, id: nanoid(8) }) }),
+    removeArtboard: (id) => set((s) => { s.artboards = s.artboards.filter((a) => a.id !== id) }),
+    updateArtboard: (id, partial) => set((s) => { const a = s.artboards.find((a) => a.id === id); if (a) Object.assign(a, partial) }),
+    setActiveArtboard: (id) => set((s) => { s.activeArtboardId = id }),
+
     commit: () => {
-      const { shapes, layerOrder, past, backgroundColor, canvasSize } = get()
+      const { shapes, layerOrder, past, backgroundColor, canvasSize, guides, artboards, swatches } = get()
       set((s) => {
         s.past = [...past.slice(-99), { shapes: JSON.parse(JSON.stringify(shapes)), layerOrder: [...layerOrder] }]
         s.future = []
@@ -389,6 +423,9 @@ export const useEditorStore = create<EditorState>()(
           layerOrder: [...layerOrder],
           backgroundColor,
           canvasSize,
+          guides: JSON.parse(JSON.stringify(guides)),
+          artboards: JSON.parse(JSON.stringify(artboards)),
+          swatches: [...swatches],
         }))
       } catch { /* storage quota exceeded or unavailable */ }
     },

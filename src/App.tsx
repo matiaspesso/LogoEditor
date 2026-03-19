@@ -7,9 +7,38 @@ import { CodePanel } from './components/CodePanel'
 import { ExportModal } from './components/ExportModal'
 import { Rulers, RULER_SIZE_PX } from './components/canvas/Rulers'
 import { useEditorStore } from './store/useEditorStore'
+import { nanoid } from 'nanoid'
+
+function ArtboardsPanel() {
+  const { artboards, addArtboard, removeArtboard, activeArtboardId, setActiveArtboard, canvasSize } = useEditorStore()
+  return (
+    <div className="panel" style={{ width: 160, flexShrink: 0, overflowY: 'auto', borderRight: '1px solid var(--border)' }}>
+      <div className="panel-section">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 8 }}>
+          <span className="panel-label" style={{ margin: 0, flex: 1 }}>Artboards</span>
+          <button
+            onClick={() => addArtboard({ name: `AB ${artboards.length + 1}`, x: 0, y: 0, width: canvasSize.width, height: canvasSize.height })}
+            style={{ fontSize: 14, width: 20, height: 20, borderRadius: 3, border: '1px solid var(--border)', background: 'rgba(255,255,255,0.06)', cursor: 'pointer', color: 'var(--text-dim)', lineHeight: '18px', padding: 0 }}>+</button>
+        </div>
+        {artboards.length === 0 && <div style={{ fontSize: 10, color: 'var(--text-dim)', textAlign: 'center' }}>Click + to add artboard</div>}
+        {artboards.map((ab) => (
+          <div key={ab.id}
+            onClick={() => setActiveArtboard(activeArtboardId === ab.id ? null : ab.id)}
+            style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 6px', borderRadius: 4, marginBottom: 3, cursor: 'pointer', background: activeArtboardId === ab.id ? 'rgba(100,160,255,0.12)' : 'transparent', border: `1px solid ${activeArtboardId === ab.id ? 'rgba(100,160,255,0.4)' : 'transparent'}` }}>
+            <span style={{ fontSize: 10, flex: 1, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ab.name}</span>
+            <span style={{ fontSize: 9, color: 'var(--text-dim)', flexShrink: 0 }}>{ab.width}×{ab.height}</span>
+            <button onClick={(e) => { e.stopPropagation(); removeArtboard(ab.id) }}
+              style={{ fontSize: 11, padding: 0, width: 14, height: 14, border: 'none', background: 'transparent', color: 'var(--text-dim)', cursor: 'pointer', flexShrink: 0 }}>×</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 export default function App() {
   const { codePanelOpen, exportModalOpen, zoom, setZoom, panX, panY, setPan, layersPanelOpen, setLayersPanelOpen, canvasSize, clearCanvas } = useEditorStore()
+  const [artboardsPanelOpen, setArtboardsPanelOpen] = useState(false)
 
   const fitView = () => {
     const toolbarW = 52
@@ -31,10 +60,13 @@ export default function App() {
       try {
         const saved = localStorage.getItem('iconforge-state')
         if (saved) {
-          const { shapes, layerOrder, backgroundColor, canvasSize } = JSON.parse(saved)
+          const { shapes, layerOrder, backgroundColor, canvasSize, guides, artboards, swatches } = JSON.parse(saved)
           store.loadShapes(shapes, layerOrder)
           if (backgroundColor) store.setBackgroundColor(backgroundColor)
           if (canvasSize) store.setCanvasSize(canvasSize)
+          if (guides) guides.forEach((g: any) => store.addGuide(g))
+          if (artboards) artboards.forEach((a: any) => store.addArtboard(a))
+          if (swatches) store.setSwatches(swatches)
           return
         }
       } catch { /* corrupt data */ }
@@ -121,6 +153,12 @@ export default function App() {
           Layers
         </button>
         <button
+          onClick={() => setArtboardsPanelOpen((o) => !o)}
+          style={{ fontSize: 11, padding: '2px 8px', background: artboardsPanelOpen ? 'rgba(233,69,96,0.15)' : 'rgba(255,255,255,0.05)', border: `1px solid ${artboardsPanelOpen ? 'var(--accent)' : 'var(--border)'}`, borderRadius: 4, color: artboardsPanelOpen ? 'var(--text)' : 'var(--text-dim)', cursor: 'pointer' }}
+        >
+          Artboards
+        </button>
+        <button
           onClick={fitView}
           title="Fit canvas to view (Ctrl+1)"
           style={{ fontSize: 11, padding: '2px 8px', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-dim)', cursor: 'pointer' }}
@@ -151,6 +189,7 @@ export default function App() {
         <Toolbar />
 
         {layersPanelOpen && <LayersPanel />}
+        {artboardsPanelOpen && <ArtboardsPanel />}
 
         {/* Canvas area */}
         <CanvasArea />
@@ -164,7 +203,7 @@ export default function App() {
 }
 
 function CanvasArea() {
-  const { zoom, panX, panY, codePanelOpen } = useEditorStore()
+  const { zoom, panX, panY, codePanelOpen, addGuide, updateGuide } = useEditorStore()
   const containerRef = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
 
@@ -179,9 +218,40 @@ function CanvasArea() {
     return () => ro.disconnect()
   }, [])
 
+  function canvasPosFromClient(clientX: number, clientY: number) {
+    const el = containerRef.current
+    if (!el) return { x: 0, y: 0 }
+    const rect = el.getBoundingClientRect()
+    const availW = rect.width - RULER_SIZE_PX
+    const availH = rect.height - RULER_SIZE_PX
+    const centerX = rect.left + RULER_SIZE_PX + availW / 2 + panX
+    const centerY = rect.top + RULER_SIZE_PX + availH / 2 + panY
+    return { x: (clientX - centerX) / zoom, y: (clientY - centerY) / zoom }
+  }
+
+  function startGuide(e: React.PointerEvent<HTMLCanvasElement>, type: 'h' | 'v') {
+    const id = nanoid(8)
+    const pos = canvasPosFromClient(e.clientX, e.clientY)
+    addGuide({ id, type, position: type === 'h' ? pos.y : pos.x })
+    e.currentTarget.setPointerCapture(e.pointerId)
+    const onMove = (ev: PointerEvent) => {
+      const p = canvasPosFromClient(ev.clientX, ev.clientY)
+      updateGuide(id, type === 'h' ? p.y : p.x)
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
+
   return (
     <div ref={containerRef} style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-      <Rulers zoom={zoom} panX={panX} panY={panY} containerW={size.w} containerH={size.h} />
+      <Rulers zoom={zoom} panX={panX} panY={panY} containerW={size.w} containerH={size.h}
+        onPointerDownH={(e) => startGuide(e, 'h')}
+        onPointerDownV={(e) => startGuide(e, 'v')}
+      />
       <div style={{ position: 'absolute', inset: 0, top: RULER_SIZE_PX, left: RULER_SIZE_PX }}>
         <SVGCanvas />
       </div>
