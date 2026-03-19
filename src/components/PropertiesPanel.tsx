@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react'
 import { useEditorStore } from '../store/useEditorStore'
 import type { Shape, DropShadow, BlurEffect, InnerShadow, GlowEffect, ShapeFilters, TextShape, PatternFill } from '../types/shapes'
+import type { BrushDef } from '../utils/brushPath'
 import { ColorPicker } from './ui/ColorPicker'
 import { AlignBar } from './ui/AlignBar'
 import { GradientEditor } from './ui/GradientEditor'
@@ -981,6 +982,108 @@ function ShapeProperties({ shape }: { shape: Shape }) {
           </button>
         </div>
       )}
+
+      {/* Brush panel — path only */}
+      {shape.type === 'path' && (() => {
+        const brush: BrushDef | undefined = (shape as any).brush
+        const hasBrush = !!brush
+        const btype = brush?.type ?? 'calligraphic'
+        const setB = (partial: Partial<BrushDef> | null) => {
+          if (partial === null) { update({ brush: undefined } as any); return }
+          const next: BrushDef = { type: btype, ...brush, ...partial }
+          update({ brush: next } as any)
+        }
+        const setBrushType = (t: BrushDef['type']) => {
+          update({ brush: { type: t, size: brush?.size ?? 8 } } as any)
+        }
+        return (
+          <div className="panel-section">
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+              <span className="panel-label" style={{ margin: 0 }}>Brush</span>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--text-dim)', cursor: 'pointer' }}>
+                <input type="checkbox" checked={hasBrush} onChange={e => { if (!e.target.checked) setB(null); else update({ brush: { type: 'calligraphic', size: 8, angle: 45, roundness: 0.2 } } as any) }} />
+                Enable
+              </label>
+            </div>
+            {hasBrush && (
+              <>
+                {/* Type selector */}
+                <div style={{ display: 'flex', gap: 3, marginBottom: 6 }}>
+                  {(['calligraphic', 'variable', 'pattern', 'art'] as const).map(t => (
+                    <button key={t}
+                      style={{ flex: 1, padding: '3px 0', fontSize: 9, background: btype === t ? 'rgba(233,69,96,0.3)' : 'rgba(255,255,255,0.06)', border: `1px solid ${btype === t ? '#e94560' : 'var(--border)'}`, borderRadius: 4, color: 'var(--text)', cursor: 'pointer', textTransform: 'capitalize' }}
+                      onClick={() => setBrushType(t)}
+                    >{t === 'calligraphic' ? 'Calli' : t === 'variable' ? 'Variable' : t === 'pattern' ? 'Pattern' : 'Art'}</button>
+                  ))}
+                </div>
+                {/* Size (all types) */}
+                <NumInput label="Size" value={brush?.size ?? 8} min={1} max={100} step={0.5} onChange={v => setB({ size: v })} />
+                {/* Calligraphic params */}
+                {btype === 'calligraphic' && (
+                  <>
+                    <NumInput label="Angle" value={brush?.angle ?? 45} min={0} max={180} onChange={v => setB({ angle: v })} unit="°" />
+                    <SliderRow label="Round" value={brush?.roundness ?? 0.2} min={0} max={1} step={0.01} onChange={v => setB({ roundness: v })} />
+                  </>
+                )}
+                {/* Variable width params */}
+                {btype === 'variable' && (() => {
+                  const profile = brush?.widthProfile ?? [{ t: 0, w: 3 }, { t: 0.5, w: (brush?.size ?? 8) }, { t: 1, w: 3 }]
+                  return (
+                    <div style={{ marginTop: 4 }}>
+                      <div className="panel-label" style={{ marginBottom: 4 }}>Width Profile</div>
+                      {profile.map((pt, i) => (
+                        <div key={i} style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 3 }}>
+                          <span style={{ fontSize: 10, color: 'var(--text-dim)', width: 28 }}>{Math.round(pt.t * 100)}%</span>
+                          <input type="range" min={0} max={brush?.size ?? 8} step={0.1} value={pt.w}
+                            style={{ flex: 1 }}
+                            onChange={e => {
+                              const np = profile.map((p, ii) => ii === i ? { ...p, w: parseFloat(e.target.value) } : p)
+                              setB({ widthProfile: np })
+                            }} />
+                          <span style={{ fontSize: 10, color: 'var(--text-dim)', width: 24 }}>{pt.w.toFixed(1)}</span>
+                        </div>
+                      ))}
+                      <button
+                        style={{ fontSize: 10, padding: '2px 6px', background: 'rgba(255,255,255,0.06)', border: '1px solid var(--border)', borderRadius: 3, color: 'var(--text-dim)', cursor: 'pointer', marginTop: 2 }}
+                        onClick={() => {
+                          const lastT = profile[profile.length - 1]?.t ?? 1
+                          const newT = Math.min(0.99, lastT * 0.6 + 0.4)
+                          setB({ widthProfile: [...profile, { t: newT, w: (brush?.size ?? 8) * 0.5 }] })
+                        }}
+                      >+ Add point</button>
+                    </div>
+                  )
+                })()}
+                {/* Pattern params */}
+                {btype === 'pattern' && (
+                  <>
+                    <div style={{ display: 'flex', gap: 3, marginBottom: 5, flexWrap: 'wrap' }}>
+                      {(['circle', 'square', 'diamond', 'leaf'] as const).map(s => (
+                        <button key={s}
+                          style={{ padding: '3px 6px', fontSize: 10, background: (brush?.patternShape ?? 'circle') === s ? 'rgba(233,69,96,0.3)' : 'rgba(255,255,255,0.06)', border: `1px solid ${(brush?.patternShape ?? 'circle') === s ? '#e94560' : 'var(--border)'}`, borderRadius: 3, color: 'var(--text)', cursor: 'pointer', textTransform: 'capitalize' }}
+                          onClick={() => setB({ patternShape: s })}
+                        >{s}</button>
+                      ))}
+                    </div>
+                    <NumInput label="Spacing" value={brush?.patternSpacing ?? (brush?.size ?? 8) * 1.5} min={1} max={100} step={0.5} onChange={v => setB({ patternSpacing: v })} />
+                  </>
+                )}
+                {/* Art params */}
+                {btype === 'art' && (
+                  <div style={{ display: 'flex', gap: 3 }}>
+                    {(['bristle', 'rope', 'charcoal'] as const).map(d => (
+                      <button key={d}
+                        style={{ flex: 1, padding: '3px 0', fontSize: 10, background: (brush?.artDesign ?? 'bristle') === d ? 'rgba(233,69,96,0.3)' : 'rgba(255,255,255,0.06)', border: `1px solid ${(brush?.artDesign ?? 'bristle') === d ? '#e94560' : 'var(--border)'}`, borderRadius: 3, color: 'var(--text)', cursor: 'pointer', textTransform: 'capitalize' }}
+                        onClick={() => setB({ artDesign: d })}
+                      >{d}</button>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )
+      })()}
     </div>
   )
 }

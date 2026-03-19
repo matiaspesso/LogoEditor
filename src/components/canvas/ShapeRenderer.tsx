@@ -1,6 +1,7 @@
 import React from 'react'
 import type { Shape, GradientFill, ShapeFilters, PatternFill } from '../../types/shapes'
 import { polygonPoints, buildShapeTransform } from '../../utils/geometry'
+import { renderBrushPaths, getBrushPatternPositions, type BrushDef } from '../../utils/brushPath'
 
 interface Props {
   shape: Shape
@@ -307,12 +308,54 @@ export function ShapeRenderer({ shape, isSelected, onPointerDown, activeTool, is
           markerEnd={markerEndAttr}
         />
       )
-    case 'path':
+    case 'path': {
+      const brushDef: BrushDef | undefined = (shape as any).brush
+      if (brushDef) {
+        const fillColor = shape.fill !== 'none' ? shape.fill : '#000'
+        const opacity = shape.opacity ?? 1
+        const baseTransform = svgTransform
+        const pe2 = pe
+        const pDown = (e: React.PointerEvent) => { if (!isSelectTool) return; e.stopPropagation(); onPointerDown(e, shape.id) }
+
+        if (brushDef.type === 'pattern') {
+          const positions = getBrushPatternPositions(shape.d, brushDef)
+          const sz = (brushDef.size ?? 8) * 0.5
+          const pColor = brushDef.patternFillColor ?? fillColor
+          return (
+            <g transform={baseTransform} opacity={opacity} filter={filterAttr} pointerEvents={pe2} onPointerDown={pDown} style={{ cursor: isSelectTool ? 'move' : 'crosshair' }}>
+              {(gradDef || filterDef) ? <defs>{gradDef}{filterDef}</defs> : null}
+              {positions.map((pos, i) => {
+                const pshape = brushDef.patternShape ?? 'circle'
+                const tr = `translate(${pos.x},${pos.y}) rotate(${pos.angleDeg})`
+                if (pshape === 'circle') return <circle key={i} cx={0} cy={0} r={sz} fill={pColor} transform={tr} />
+                if (pshape === 'square') return <rect key={i} x={-sz} y={-sz} width={sz*2} height={sz*2} fill={pColor} transform={tr} />
+                if (pshape === 'diamond') return <polygon key={i} points={`0,${-sz} ${sz},0 0,${sz} ${-sz},0`} fill={pColor} transform={tr} />
+                if (pshape === 'leaf') return <ellipse key={i} cx={0} cy={0} rx={sz * 1.5} ry={sz * 0.5} fill={pColor} transform={tr} />
+                return null
+              })}
+            </g>
+          )
+        }
+
+        const brushPaths = renderBrushPaths(shape.d, brushDef)
+        if (brushPaths) {
+          return (
+            <g transform={baseTransform} opacity={opacity} filter={filterAttr} pointerEvents={pe2} onPointerDown={pDown} style={{ cursor: isSelectTool ? 'move' : 'crosshair' }}>
+              {(gradDef || filterDef) && <defs>{gradDef}{filterDef}</defs>}
+              {brushPaths.map((pd, i) => (
+                <path key={i} d={pd} fill={fillColor} fillOpacity={shape.fillOpacity} stroke="none" />
+              ))}
+            </g>
+          )
+        }
+      }
+      // Normal path (no brush, or brush rendering returned null)
       return wrapWithDefs(
         <path d={shape.d} {...common}
           markerStart={markerStartAttr}
           markerEnd={markerEndAttr} />
       )
+    }
     case 'text': {
       const ls = (shape as any).letterSpacing
       const charOffsets: number[] | undefined = (shape as any).charOffsets

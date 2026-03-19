@@ -8,6 +8,8 @@ import { parseSimplePath, serializeSimplePath, isSimplePath } from '../../utils/
 import { parseBezierPath, serializeBezierPath, isBezierPath, mirrorHandle, applyHandleConstraint, autoSmoothNode, applyAutoSmooth, type BezierNode, type NodeType } from '../../utils/bezierPathUtils'
 import type { Shape } from '../../types/shapes'
 import type { SnapGuide } from '../../utils/smartSnap'
+import { samplePath, type PathSample } from '../../utils/brushPath'
+import type { BrushDef } from '../../utils/brushPath'
 
 // Module-level clipboard (survives re-renders)
 let svgClipboard: Shape[] = []
@@ -95,9 +97,20 @@ export function SVGCanvas() {
     origPoints: { x: number; y: number }[]
     closed: boolean
   } | null>(null)
-  // Bezier pen tool state
-  const bezierNodesRef = useRef<BezierNode[]>([])
-  const penDraggingRef = useRef(false)  // true while mouse button is held during path drawing
+  // Pen tool state — completely self-contained
+  const penNodesRef = useRef<BezierNode[]>([])
+  const penIsDraggingRef = useRef(false)   // mouse held down (dragging handle)
+  const penAltBreakRef = useRef(false)     // alt held when drag started
+  const penCursorRef = useRef({ x: 0, y: 0 })  // last known cursor position
+
+  interface PenPreview {
+    nodes: BezierNode[]
+    cx: number; cy: number
+    closing: boolean
+    dragging: boolean
+  }
+  const [penPreview, setPenPreview] = useState<PenPreview | null>(null)
+
   // Bezier node editing
   const bezierHandleDragRef = useRef<{
     pathId: string
@@ -106,6 +119,14 @@ export function SVGCanvas() {
     origNodes: BezierNode[]
     closed: boolean
     breakTangent: boolean
+  } | null>(null)
+  // Width tool handle dragging
+  const widthHandleDragRef = useRef<{
+    pathId: string
+    handleIndex: number
+    side: 'left' | 'right'
+    origProfile: { t: number; w: number }[]
+    samples: PathSample[]
   } | null>(null)
 
   const store = useEditorStore()
@@ -136,6 +157,36 @@ export function SVGCanvas() {
     x: snap(x, gridSize, snapEnabled),
     y: snap(y, gridSize, snapEnabled),
   }), [gridSize, snapEnabled])
+
+  const finalizePenPath = useCallback((closed: boolean) => {
+    const nodes = penNodesRef.current
+    if (nodes.length >= 2) {
+      const d = serializeBezierPath(nodes, closed)
+      const id = addShape({ ...DEFAULT_SHAPE_PROPS, type: 'path', d, fill: '#e94560', fillOpacity: 1, stroke: 'none', strokeWidth: 1, name: 'Path' } as any)
+      useEditorStore.getState().setSelectedIds([id])
+      commit()
+    }
+    penNodesRef.current = []
+    penIsDraggingRef.current = false
+    penAltBreakRef.current = false
+    setPenPreview(null)
+    setDrawing(null)
+    setActiveTool('select')
+  }, [addShape, commit, setDrawing, setActiveTool])
+
+  const updatePenPreview = useCallback((cx: number, cy: number) => {
+    penCursorRef.current = { x: cx, y: cy }
+    const nodes = penNodesRef.current
+    const closing = nodes.length >= 2
+      ? Math.hypot(cx - nodes[0].x, cy - nodes[0].y) < 8 / zoom
+      : false
+    setPenPreview({
+      nodes: nodes.map(n => ({ ...n })),
+      cx, cy,
+      closing,
+      dragging: penIsDraggingRef.current,
+    })
+  }, [zoom])
 
   // Handle pointer down on canvas background
   const handleCanvasPointerDown = useCallback((e: React.PointerEvent) => {
@@ -174,25 +225,30 @@ export function SVGCanvas() {
     if (activeTool === 'pan') return
 
     if (activeTool === 'path') {
-      // Place a new bezier anchor point and start dragging its handle
-      const node: BezierNode = {
-        x: snapped.x, y: snapped.y,
-        cp1x: snapped.x, cp1y: snapped.y,
-        cp2x: snapped.x, cp2y: snapped.y,
-        smooth: true,
-        nodeType: 'corner',  // becomes 'symmetric' if they drag
+      const { x, y } = snapped
+
+      // Close path: clicking near first anchor when 2+ nodes exist
+      if (penNodesRef.current.length >= 2) {
+        const first = penNodesRef.current[0]
+        if (Math.hypot(x - first.x, y - first.y) < 8 / zoom) {
+          finalizePenPath(true)
+          return
+        }
       }
-      bezierNodesRef.current = [...bezierNodesRef.current, node]
-      penDraggingRef.current = true
-      setDrawing({
-        isDrawing: true,
-        startX: snapped.x,
-        startY: snapped.y,
-        currentX: snapped.x,
-        currentY: snapped.y,
-        pathPoints: bezierNodesRef.current.map((n) => ({ x: n.x, y: n.y })),
-      })
+
+      // Place a new anchor
+      const node: BezierNode = {
+        x, y,
+        cp1x: x, cp1y: y,
+        cp2x: x, cp2y: y,
+        smooth: false,
+        nodeType: 'corner',
+      }
+      penNodesRef.current = [...penNodesRef.current, node]
+      penIsDraggingRef.current = true
+      penAltBreakRef.current = e.altKey
       ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+      updatePenPreview(x, y)
       return
     }
 
@@ -204,7 +260,7 @@ export function SVGCanvas() {
       currentY: snapped.y,
     })
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-  }, [activeTool, clearSelection, setDrawing, toCanvas, snapXY])
+  }, [activeTool, clearSelection, setDrawing, toCanvas, snapXY, zoom, finalizePenPath, updatePenPreview])
 
   // Handle pointer down on shape (for selection + move)
   const handleShapePointerDown = useCallback((e: React.PointerEvent, id: string) => {
@@ -218,6 +274,10 @@ export function SVGCanvas() {
         setSelectedIds([id])
       }
       setActiveTool('select')
+      return
+    }
+    if (activeTool === 'width') {
+      if (!selectedIds.includes(id)) selectShape(id, false)
       return
     }
     if (activeTool !== 'select') return
@@ -294,6 +354,25 @@ export function SVGCanvas() {
     const pt = toCanvas(e)
     const snapped = snapXY(pt.x, pt.y)
 
+    // Width tool handle drag
+    if (widthHandleDragRef.current) {
+      const { pathId, handleIndex, origProfile, samples } = widthHandleDragRef.current
+      const handle = origProfile[handleIndex]
+      const si = Math.round(handle.t * (samples.length - 1))
+      const s = samples[Math.max(0, Math.min(si, samples.length - 1))]
+      const perpX = -s.ty; const perpY = s.tx
+      const dx = snapped.x - s.x; const dy = snapped.y - s.y
+      const projection = dx * perpX + dy * perpY
+      const newW = Math.max(0.5, Math.abs(projection) * 2)
+      const newProfile = origProfile.map((p, i) => i === handleIndex ? { ...p, w: newW } : p)
+      const pathShape = shapes.find(sh => sh.id === pathId)
+      if (pathShape?.type === 'path') {
+        const existingBrush: BrushDef = { type: 'variable', size: newW, ...((pathShape as any).brush ?? {}), widthProfile: newProfile }
+        updateShape(pathId, { brush: existingBrush } as any)
+      }
+      return
+    }
+
     // Simple path node handle drag
     if (nodeHandleDragRef.current) {
       const { pathId, pointIndex, origPoints, closed } = nodeHandleDragRef.current
@@ -337,17 +416,31 @@ export function SVGCanvas() {
       return
     }
 
-    // Bezier pen: while mouse button held, drag the outgoing handle of the last node
-    if (activeTool === 'path' && penDraggingRef.current && bezierNodesRef.current.length > 0) {
-      const nodes = bezierNodesRef.current
+    // Pen tool: dragging handle of just-placed anchor
+    if (activeTool === 'path' && penIsDraggingRef.current && penNodesRef.current.length > 0) {
+      const nodes = penNodesRef.current
       const last = { ...nodes[nodes.length - 1] }
       last.cp2x = pt.x; last.cp2y = pt.y
-      const mirror = mirrorHandle(last.x, last.y, pt.x, pt.y)
-      last.cp1x = mirror.x; last.cp1y = mirror.y
-      last.nodeType = 'symmetric'  // promoted from corner when dragged
-      last.smooth = true
-      bezierNodesRef.current = [...nodes.slice(0, -1), last]
-      if (drawing) setDrawing({ ...drawing, currentX: pt.x, currentY: pt.y })
+      if (!penAltBreakRef.current) {
+        // Symmetric: mirror cp2 to cp1
+        last.cp1x = 2 * last.x - pt.x
+        last.cp1y = 2 * last.y - pt.y
+        last.nodeType = 'symmetric'
+        last.smooth = true
+      }
+      // If dragged far enough, promote to smooth node
+      const dragDist = Math.hypot(pt.x - last.x, pt.y - last.y)
+      if (dragDist > 2 / zoom) {
+        last.nodeType = penAltBreakRef.current ? 'corner' : 'symmetric'
+      }
+      penNodesRef.current = [...nodes.slice(0, -1), last]
+      updatePenPreview(pt.x, pt.y)
+      return
+    }
+
+    // Pen tool: between clicks — update rubber-band preview
+    if (activeTool === 'path' && !penIsDraggingRef.current) {
+      updatePenPreview(pt.x, pt.y)
       return
     }
 
@@ -465,7 +558,7 @@ export function SVGCanvas() {
         applyResize(startShape, targetX, targetY, targetW, targetH, scaleX, scaleY)
       })
     }
-  }, [drawing, drag, activeTool, setDrawing, updateShape, toCanvas, snapXY, selBBox])
+  }, [drawing, drag, activeTool, setDrawing, updateShape, toCanvas, snapXY, selBBox, zoom, updatePenPreview])
 
   // Use the shared getShapeBBox from geometry.ts — single source of truth for all shape types including path
   const getShapeBBoxLocal = getShapeBBox
@@ -517,6 +610,11 @@ export function SVGCanvas() {
       commit()
       return
     }
+    if (widthHandleDragRef.current) {
+      widthHandleDragRef.current = null
+      commit()
+      return
+    }
     if (drag?.type === 'move' || drag?.type === 'resize') {
       setDrag(null)
       setSnapGuides([])
@@ -555,11 +653,10 @@ export function SVGCanvas() {
     }
 
     if (activeTool === 'path') {
-      // Node was already placed on pointerDown; just release the handle drag
-      penDraggingRef.current = false
-      if (drawing) setDrawing({ ...drawing, pathPoints: bezierNodesRef.current.map((n) => ({ x: n.x, y: n.y })) })
+      penIsDraggingRef.current = false
       pointerDownRef.current = null
       didMoveRef.current = false
+      updatePenPreview(penCursorRef.current.x, penCursorRef.current.y)
       return
     }
 
@@ -574,20 +671,17 @@ export function SVGCanvas() {
     }
     setDrawing(null)
     pointerDownRef.current = null
-  }, [drawing, activeTool, drag, setDrawing, setDrag, addShape, canvasSize, commit, snapXY, shapes, setSelectedIds])
+  }, [drawing, activeTool, drag, setDrawing, setDrag, addShape, canvasSize, commit, snapXY, shapes, setSelectedIds, finalizePenPath, updatePenPreview])
 
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
     if (activeTool === 'path') {
-      const nodes = bezierNodesRef.current
-      // Remove the last node added by the double-click's first click
-      const finalNodes = nodes.length > 1 ? nodes.slice(0, -1) : nodes
-      if (finalNodes.length > 1) {
-        const d = serializeBezierPath(finalNodes, false)
-        addShape({ ...DEFAULT_SHAPE_PROPS, type: 'path', d, fill: '#e94560', fillOpacity: 1, stroke: 'none', strokeWidth: 1, name: 'Path' } as any)
+      // Double-click: the second click of the double-click already added a phantom node
+      // Remove it and finalize
+      const nodes = penNodesRef.current
+      if (nodes.length > 1) {
+        penNodesRef.current = nodes.slice(0, -1)
       }
-      bezierNodesRef.current = []
-      penDraggingRef.current = false
-      setDrawing(null)
+      finalizePenPath(false)
       return
     }
     // Double-click a selected shape to edit it
@@ -609,13 +703,20 @@ export function SVGCanvas() {
         setEditingNodePathId(shape.id)
       }
     }
-  }, [activeTool, drawing, addShape, setDrawing, selectedIds, shapes, setEditingTextId, charEditId, editingTextId])
+  }, [activeTool, drawing, addShape, setDrawing, selectedIds, shapes, setEditingTextId, charEditId, editingTextId, finalizePenPath])
 
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       if (e.key === 'Delete' || e.key === 'Backspace') {
+        // Backspace while drawing: remove last pen anchor
+        if (useEditorStore.getState().activeTool === 'path' && penNodesRef.current.length > 0) {
+          e.preventDefault()
+          penNodesRef.current = penNodesRef.current.slice(0, -1)
+          updatePenPreview(penCursorRef.current.x, penCursorRef.current.y)
+          return
+        }
         // Delete selected node in node-edit mode
         if (editingNodePathId && selectedNodeIndex !== null) {
           const pathShape = useEditorStore.getState().shapes.find((s) => s.id === editingNodePathId)
@@ -713,13 +814,32 @@ export function SVGCanvas() {
       if (e.key === 'Escape') {
         if (charEditId) { setCharEditId(null); return }
         if (editingNodePathId) { setEditingNodePathId(null); setSelectedNodeIndex(null); return }
-        if (drawing && activeTool === 'path') {
-          bezierNodesRef.current = []
-          penDraggingRef.current = false
+        if (useEditorStore.getState().activeTool === 'path') {
+          const nodes = penNodesRef.current
+          if (nodes.length >= 2) {
+            finalizePenPath(false)
+          } else {
+            penNodesRef.current = []
+            penIsDraggingRef.current = false
+            setPenPreview(null)
+            setDrawing(null)
+            useEditorStore.getState().setActiveTool('select')
+          }
+          return
         }
         clearSelection()
         if (drawing) setDrawing(null)
         if (draggingPreset) { setDraggingPreset(null); setPresetGhost(null) }
+      }
+      if (e.key === 'Enter' || e.key === 'Return') {
+        if (useEditorStore.getState().activeTool === 'path') {
+          e.preventDefault()
+          const nodes = penNodesRef.current
+          if (nodes.length >= 2) {
+            finalizePenPath(false)
+          }
+          return
+        }
       }
       if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
         e.preventDefault()
@@ -754,7 +874,29 @@ export function SVGCanvas() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [selectedIds, shapes, clearSelection, drawing, setDrawing, setSelectedIds, draggingPreset, setDraggingPreset, editingNodePathId, selectedNodeIndex, charEditId, selectedCharIndex])
+  }, [selectedIds, shapes, clearSelection, drawing, setDrawing, setSelectedIds, draggingPreset, setDraggingPreset, editingNodePathId, selectedNodeIndex, charEditId, selectedCharIndex, finalizePenPath, updatePenPreview])
+
+  // Finalize in-progress bezier path when switching away from the path tool
+  const prevToolRef = useRef<string>(activeTool)
+  useEffect(() => {
+    const prev = prevToolRef.current
+    prevToolRef.current = activeTool
+    if (prev === 'path' && activeTool !== 'path') {
+      const nodes = penNodesRef.current
+      if (nodes.length >= 2) {
+        const d = serializeBezierPath(nodes, false)
+        const { addShape: add, setSelectedIds: setSel, commit: cmt } = useEditorStore.getState()
+        const id = add({ ...DEFAULT_SHAPE_PROPS, type: 'path', d, fill: '#e94560', fillOpacity: 1, stroke: 'none', strokeWidth: 1, name: 'Path' } as any)
+        cmt()
+        setSel([id])
+      }
+      penNodesRef.current = []
+      penIsDraggingRef.current = false
+      penAltBreakRef.current = false
+      setPenPreview(null)
+      setDrawing(null)
+    }
+  }, [activeTool, setDrawing])
 
   // Cancel preset drag if pointer released outside canvas
   useEffect(() => {
@@ -829,32 +971,6 @@ export function SVGCanvas() {
             <line x1={startX} y1={startY} x2={currentX} y2={currentY} stroke="#e94560" strokeWidth={1.5 / zoom} pointerEvents="none" />
           )
           break
-        case 'path': {
-          const nodes = bezierNodesRef.current
-          if (nodes.length > 0) {
-            // Show committed path + preview segment to cursor
-            const previewNode: BezierNode = { x: currentX, y: currentY, cp1x: currentX, cp1y: currentY, cp2x: currentX, cp2y: currentY, smooth: false, nodeType: 'corner' }
-            const allNodes = [...nodes, previewNode]
-            const d = serializeBezierPath(allNodes, false)
-            drawingPreview = (
-              <g pointerEvents="none">
-                <path d={d} fill="none" stroke="#e94560" strokeWidth={1.5 / zoom} />
-                {nodes.map((n, i) => (
-                  <g key={i}>
-                    <circle cx={n.x} cy={n.y} r={3 / zoom} fill="#fff" stroke="#e94560" strokeWidth={1 / zoom} />
-                    {(n.cp2x !== n.x || n.cp2y !== n.y) && (
-                      <>
-                        <line x1={n.x} y1={n.y} x2={n.cp2x} y2={n.cp2y} stroke="rgba(233,69,96,0.5)" strokeWidth={1 / zoom} />
-                        <circle cx={n.cp2x} cy={n.cp2y} r={2.5 / zoom} fill="rgba(233,69,96,0.7)" />
-                      </>
-                    )}
-                  </g>
-                ))}
-              </g>
-            )
-          }
-          break
-        }
         case 'polygon':
         case 'star': {
           const size = Math.max(w, h) / 2
@@ -997,6 +1113,97 @@ export function SVGCanvas() {
         })}
 
         {drawingPreview}
+
+        {/* Pen tool live preview */}
+        {activeTool === 'path' && penPreview && (() => {
+          const { nodes, cx, cy, closing } = penPreview
+          const r = (n: number) => Math.round(n * 100) / 100
+          const strokeW = 1.5 / zoom
+          const anchorR = 3.5 / zoom
+          const handleR = 2.5 / zoom
+
+          const elements: React.ReactElement[] = []
+
+          // 1. All placed segments so far
+          if (nodes.length >= 2) {
+            const d = serializeBezierPath(nodes, false)
+            elements.push(
+              <path key="placed" d={d} fill="none" stroke="#e94560" strokeWidth={strokeW} pointerEvents="none" />
+            )
+          }
+
+          // 2. Rubber-band segment from last node to cursor (or closing back to first)
+          if (nodes.length >= 1) {
+            const last = nodes[nodes.length - 1]
+            const targetX = closing ? nodes[0].x : cx
+            const targetY = closing ? nodes[0].y : cy
+            const hasOutHandle = last.cp2x !== last.x || last.cp2y !== last.y
+            const rbD = hasOutHandle
+              ? `M ${r(last.x)} ${r(last.y)} C ${r(last.cp2x)} ${r(last.cp2y)} ${r(targetX)} ${r(targetY)} ${r(targetX)} ${r(targetY)}`
+              : `M ${r(last.x)} ${r(last.y)} L ${r(targetX)} ${r(targetY)}`
+            elements.push(
+              <path key="rubber" d={rbD} fill="none" stroke="rgba(233,69,96,0.7)" strokeWidth={1 / zoom} strokeDasharray={`${4/zoom} ${3/zoom}`} pointerEvents="none" />
+            )
+          }
+
+          // 3. Anchor points and handles
+          nodes.forEach((n, i) => {
+            const isFirst = i === 0
+            const isLast = i === nodes.length - 1
+            const ntype: NodeType = n.nodeType ?? (n.smooth ? 'symmetric' : 'corner')
+            const hasCP1 = n.cp1x !== n.x || n.cp1y !== n.y
+            const hasCP2 = n.cp2x !== n.x || n.cp2y !== n.y
+
+            // Only show handles for last anchor
+            const showHandles = isLast
+
+            elements.push(
+              <g key={`a${i}`} pointerEvents="none">
+                {showHandles && hasCP1 && (
+                  <>
+                    <line x1={n.x} y1={n.y} x2={n.cp1x} y2={n.cp1y} stroke="rgba(255,255,255,0.45)" strokeWidth={1/zoom} />
+                    <circle cx={n.cp1x} cy={n.cp1y} r={handleR} fill="#e94560" stroke="#fff" strokeWidth={0.8/zoom} />
+                  </>
+                )}
+                {showHandles && hasCP2 && (
+                  <>
+                    <line x1={n.x} y1={n.y} x2={n.cp2x} y2={n.cp2y} stroke="rgba(255,255,255,0.45)" strokeWidth={1/zoom} />
+                    <circle cx={n.cp2x} cy={n.cp2y} r={handleR} fill="#e94560" stroke="#fff" strokeWidth={0.8/zoom} />
+                  </>
+                )}
+                {/* Anchor shape: square=corner, circle=smooth */}
+                {ntype === 'corner' ? (
+                  <rect
+                    x={n.x - anchorR} y={n.y - anchorR}
+                    width={anchorR * 2} height={anchorR * 2}
+                    fill={isFirst && closing ? '#00e676' : isLast ? '#e94560' : '#fff'}
+                    stroke="#e94560" strokeWidth={1/zoom}
+                  />
+                ) : (
+                  <circle cx={n.x} cy={n.y} r={anchorR}
+                    fill={isFirst && closing ? '#00e676' : isLast ? '#e94560' : '#fff'}
+                    stroke="#e94560" strokeWidth={1/zoom}
+                  />
+                )}
+              </g>
+            )
+          })
+
+          // 4. Close-path highlight ring on first anchor
+          if (closing && nodes.length >= 2) {
+            elements.push(
+              <circle key="close-ring"
+                cx={nodes[0].x} cy={nodes[0].y}
+                r={anchorR * 2.2}
+                fill="none" stroke="#00e676" strokeWidth={1.5/zoom}
+                pointerEvents="none"
+              />
+            )
+          }
+
+          return <g pointerEvents="none">{elements}</g>
+        })()}
+
         {presetGhostEl}
 
         {selBBox && selectedIds.length > 0 && activeTool === 'select' && !drawing && (
@@ -1173,6 +1380,48 @@ export function SVGCanvas() {
           }
 
           return null
+        })()}
+
+        {/* Width tool handles */}
+        {activeTool === 'width' && selectedIds.length === 1 && (() => {
+          const pathShape = shapes.find(s => s.id === selectedIds[0])
+          if (!pathShape || pathShape.type !== 'path') return null
+          const brushDef = (pathShape as any).brush as BrushDef | undefined
+          if (!brushDef || brushDef.type !== 'variable') return null
+          const profile = brushDef.widthProfile ?? [{ t: 0, w: 3 }, { t: 0.5, w: brushDef.size ?? 8 }, { t: 1, w: 3 }]
+          const samples = samplePath(pathShape.d, 120)
+          if (samples.length < 2) return null
+
+          return (
+            <g pointerEvents="all">
+              {profile.map((pt, i) => {
+                const si = Math.round(pt.t * (samples.length - 1))
+                const s = samples[Math.max(0, Math.min(si, samples.length - 1))]
+                const hw = pt.w / 2
+                const lx = s.x - s.ty * hw; const ly = s.y + s.tx * hw
+                const rx = s.x + s.ty * hw; const ry = s.y - s.tx * hw
+                return (
+                  <g key={i}>
+                    <line x1={lx} y1={ly} x2={rx} y2={ry} stroke="rgba(100,160,255,0.6)" strokeWidth={1 / zoom} pointerEvents="none" />
+                    <circle cx={lx} cy={ly} r={4 / zoom} fill="#64a0ff" stroke="#fff" strokeWidth={1 / zoom} style={{ cursor: 'ns-resize' }}
+                      onPointerDown={(e) => {
+                        e.stopPropagation()
+                        ;(e.currentTarget as SVGElement).closest('svg')?.parentElement?.setPointerCapture(e.pointerId)
+                        widthHandleDragRef.current = { pathId: pathShape.id, handleIndex: i, side: 'left', origProfile: profile, samples }
+                      }}
+                    />
+                    <circle cx={rx} cy={ry} r={4 / zoom} fill="#64a0ff" stroke="#fff" strokeWidth={1 / zoom} style={{ cursor: 'ns-resize' }}
+                      onPointerDown={(e) => {
+                        e.stopPropagation()
+                        ;(e.currentTarget as SVGElement).closest('svg')?.parentElement?.setPointerCapture(e.pointerId)
+                        widthHandleDragRef.current = { pathId: pathShape.id, handleIndex: i, side: 'right', origProfile: profile, samples }
+                      }}
+                    />
+                  </g>
+                )
+              })}
+            </g>
+          )
         })()}
 
         {/* Character offset editing handles */}

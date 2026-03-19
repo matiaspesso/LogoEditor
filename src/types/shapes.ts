@@ -51,6 +51,18 @@ export interface PatternFill {
   angle: number   // rotation in degrees
 }
 
+export interface BrushDef {
+  type: 'calligraphic' | 'variable' | 'pattern' | 'art'
+  angle?: number
+  roundness?: number
+  size?: number
+  widthProfile?: { t: number; w: number }[]
+  patternShape?: 'circle' | 'square' | 'diamond' | 'leaf'
+  patternSpacing?: number
+  patternFillColor?: string
+  artDesign?: 'bristle' | 'rope' | 'charcoal'
+}
+
 export interface ShapeFilters {
   shadow?: DropShadow
   blur?: BlurEffect
@@ -71,6 +83,7 @@ export type ToolType =
   | 'frame'
   | 'eyedropper'
   | 'pan'
+  | 'width'
 
 // Group registry for nested groups
 export interface GroupDef {
@@ -164,6 +177,7 @@ export interface LineShape extends BaseShape {
 export interface PathShape extends BaseShape {
   type: 'path'
   d: string
+  brush?: BrushDef
 }
 
 export interface TextShape extends BaseShape {
