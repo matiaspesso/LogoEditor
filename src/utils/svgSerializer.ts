@@ -56,7 +56,8 @@ function filterDefString(shape: Shape): string {
   const blur = f.blur?.enabled ? f.blur : null
   const innerShadow = f.innerShadow?.enabled ? f.innerShadow : null
   const glow = f.glow?.enabled ? f.glow : null
-  if (!shadow && !blur && !innerShadow && !glow) return ''
+  const feather = f.feather?.enabled ? f.feather : null
+  if (!shadow && !blur && !innerShadow && !glow && !feather) return ''
 
   const fid = `fx-${shape.id}`
   const parts: string[] = []
@@ -96,8 +97,12 @@ function filterDefString(shape: Shape): string {
     mergeInputs.push('iout')
   }
 
-  const mergeNodes = mergeInputs.map((inp) => `<feMergeNode in="${inp}"/>`).join('')
   const region = `x="-60%" y="-60%" width="220%" height="220%"`
+  if (feather) {
+    const merge = mergeInputs.length > 0 ? `<feMerge>${mergeInputs.map((i) => `<feMergeNode in="${i}"/>`).join('')}</feMerge>` : ''
+    return `<filter id="${fid}" ${region}>${parts.join('')}${merge}<feGaussianBlur in="SourceAlpha" stdDeviation="${feather.amount}" result="feaBlu"/><feComposite in="${mergeInputs[mergeInputs.length - 1] ?? 'SourceGraphic'}" in2="feaBlu" operator="in"/></filter>`
+  }
+  const mergeNodes = mergeInputs.map((inp) => `<feMergeNode in="${inp}"/>`).join('')
   return `<filter id="${fid}" ${region}>${parts.join('')}<feMerge>${mergeNodes}</feMerge></filter>`
 }
 
@@ -194,7 +199,7 @@ function shapeToSVGElement(shape: Shape, allShapes?: Shape[]): string {
     shape.strokeLinecap && shape.strokeLinecap !== 'butt' ? `stroke-linecap="${shape.strokeLinecap}"` : '',
     shape.strokeLinejoin && shape.strokeLinejoin !== 'miter' ? `stroke-linejoin="${shape.strokeLinejoin}"` : '',
     shape.opacity !== 1 ? `opacity="${shape.opacity}"` : '',
-    shape.filters && (shape.filters.shadow?.enabled || shape.filters.blur?.enabled || shape.filters.innerShadow?.enabled || shape.filters.glow?.enabled)
+    shape.filters && (shape.filters.shadow?.enabled || shape.filters.blur?.enabled || shape.filters.innerShadow?.enabled || shape.filters.glow?.enabled || shape.filters.feather?.enabled)
       ? `filter="url(#fx-${shape.id})"` : '',
     transform ? `transform="${transform}"` : '',
   ].filter(Boolean).join(' ')
@@ -235,6 +240,25 @@ function shapeToSVGElement(shape: Shape, allShapes?: Shape[]): string {
         const offset = shape.arcOffset ?? 50
         return `<text font-size="${shape.fontSize}" font-family="${shape.fontFamily}" font-weight="${shape.fontWeight}"${lsAttr} ${base}${clipAttr}><textPath href="#${arcId}" startOffset="${offset}%" textAnchor="middle">${shape.text}</textPath></text>`
       }
+      // Area text word-wrap
+      const textWidth: number | undefined = (shape as any).textWidth
+      if (textWidth && typeof document !== 'undefined') {
+        const cvs = document.createElement('canvas')
+        const ctx2 = cvs.getContext('2d')!
+        ctx2.font = `${shape.fontWeight} ${shape.fontSize}px ${shape.fontFamily}`
+        const words = shape.text.split(' ')
+        const lineH = shape.fontSize * 1.3
+        const lines: string[] = []
+        let cur = ''
+        for (const word of words) {
+          const test = cur ? `${cur} ${word}` : word
+          if (ctx2.measureText(test).width > textWidth && cur) { lines.push(cur); cur = word } else cur = test
+        }
+        if (cur) lines.push(cur)
+        const tspans = lines.map((line, i) => `<tspan x="${shape.x}" dy="${i === 0 ? 0 : lineH}">${line}</tspan>`).join('')
+        return `<text x="${shape.x}" y="${shape.y}" font-size="${shape.fontSize}" font-family="${shape.fontFamily}" font-weight="${shape.fontWeight}" text-anchor="${shape.textAnchor}"${lsAttr} ${base}${clipAttr}>${tspans}</text>`
+      }
+
       const charOffsets: number[] | undefined = (shape as any).charOffsets
       const charOffsetsY: number[] | undefined = (shape as any).charOffsetsY
       const hasOffsets = (charOffsets?.some((v: number) => v !== 0)) || (charOffsetsY?.some((v: number) => v !== 0))
@@ -291,7 +315,7 @@ export function serializeSVG(
     .join('\n')
 
   const filterDefs = orderedShapes
-    .filter((s) => s.filters && (s.filters.shadow?.enabled || s.filters.blur?.enabled || s.filters.innerShadow?.enabled || s.filters.glow?.enabled))
+    .filter((s) => s.filters && (s.filters.shadow?.enabled || s.filters.blur?.enabled || s.filters.innerShadow?.enabled || s.filters.glow?.enabled || s.filters.feather?.enabled))
     .map((s) => `    ${filterDefString(s)}`)
     .join('\n')
 

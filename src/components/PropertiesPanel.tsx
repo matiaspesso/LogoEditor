@@ -149,6 +149,63 @@ function ToggleRow({ label, active, onToggle }: { label: string; active: boolean
   )
 }
 
+function GraphicStylesPanel({ shape }: { shape: Shape }) {
+  const { graphicStyles, addGraphicStyle, removeGraphicStyle, applyGraphicStyle } = useEditorStore()
+  return (
+    <div className="panel-section">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+        <span className="panel-label" style={{ margin: 0 }}>Styles</span>
+        <button
+          style={{ fontSize: 10, padding: '2px 6px', background: 'rgba(100,160,255,0.15)', border: '1px solid rgba(100,160,255,0.4)', borderRadius: 3, color: '#a0c8ff', cursor: 'pointer' }}
+          title="Save current appearance as a style"
+          onClick={() => {
+            const name = prompt('Style name:', `Style ${graphicStyles.length + 1}`)
+            if (!name) return
+            addGraphicStyle({
+              name,
+              fill: shape.fill,
+              fillOpacity: shape.fillOpacity,
+              stroke: shape.stroke,
+              strokeWidth: shape.strokeWidth,
+              opacity: shape.opacity,
+              gradientFill: shape.gradientFill,
+              patternFill: shape.patternFill,
+              filters: shape.filters,
+            })
+          }}>
+          + Save Style
+        </button>
+      </div>
+      {graphicStyles.length === 0 && (
+        <div style={{ fontSize: 10, color: 'var(--text-dim)', padding: '2px 0' }}>No saved styles yet.</div>
+      )}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+        {graphicStyles.map((gs) => (
+          <div key={gs.id} style={{ position: 'relative' }}>
+            <button
+              title={`Apply "${gs.name}"`}
+              style={{
+                width: 28, height: 28, borderRadius: 4,
+                background: gs.gradientFill ? `linear-gradient(135deg, ${gs.gradientFill.stops.map(s => s.color).join(', ')})` : gs.fill,
+                border: '2px solid var(--border)', cursor: 'pointer',
+                fontSize: 0,
+              }}
+              onClick={() => applyGraphicStyle(shape.id, gs.id)}
+            />
+            <button
+              title="Remove style"
+              style={{ position: 'absolute', top: -4, right: -4, width: 12, height: 12, borderRadius: '50%', background: '#e94560', border: 'none', color: '#fff', fontSize: 8, lineHeight: '12px', cursor: 'pointer', padding: 0 }}
+              onClick={() => removeGraphicStyle(gs.id)}>
+              ✕
+            </button>
+            <div style={{ fontSize: 8, color: 'var(--text-dim)', textAlign: 'center', maxWidth: 28, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{gs.name}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function FXPanel({ shape }: { shape: Shape }) {
   const { updateShape, commit } = useEditorStore()
   const [shadowColorOpen, setShadowColorOpen] = useState(false)
@@ -294,6 +351,29 @@ function FXPanel({ shape }: { shape: Shape }) {
           </div>
         )}
       </div>
+
+      {/* ── Feather ── */}
+      {(() => {
+        const feather = fx.feather
+        const featherActive = feather?.enabled ?? false
+        const toggleFeather = () => {
+          if (!feather) setFx({ ...fx, feather: { enabled: true, amount: 3 } })
+          else setFx({ ...fx, feather: { ...feather, enabled: !feather.enabled } })
+        }
+        return (
+          <div>
+            <ToggleRow label="Feather" active={featherActive} onToggle={toggleFeather} />
+            {featherActive && feather && (
+              <div style={{ paddingLeft: 4 }}>
+                <SliderRow label="Amount" value={feather.amount}
+                  onChange={(v) => { setFxLive({ ...fx, feather: { ...feather, amount: v } }); }}
+                  min={0} max={20} step={0.5} />
+              </div>
+            )}
+          </div>
+        )
+      })()}
+
     </div>
   )
 }
@@ -768,6 +848,9 @@ function ShapeProperties({ shape }: { shape: Shape }) {
       {/* FX */}
       <FXPanel shape={shape} />
 
+      {/* Graphic Styles */}
+      <GraphicStylesPanel shape={shape} />
+
       {/* Text content */}
       {shape.type === 'text' && (
         <div className="panel-section">
@@ -881,6 +964,24 @@ function ShapeProperties({ shape }: { shape: Shape }) {
                 style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
               />
             </div>
+            {/* Area text */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+              <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>Area text</span>
+              <input type="checkbox"
+                checked={!!(shape as any).textWidth}
+                onChange={(e) => update({ textWidth: e.target.checked ? 40 : undefined } as any)}
+                style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
+              />
+            </div>
+            {!!(shape as any).textWidth && (
+              <div style={{ display: 'flex', gap: 4, marginBottom: 4 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 10, color: 'var(--text-dim)', marginBottom: 2 }}>Width</div>
+                  <input type="number" className="input-field" value={(shape as any).textWidth}
+                    onChange={(e) => update({ textWidth: parseFloat(e.target.value) || 40 } as any)} />
+                </div>
+              </div>
+            )}
             {(shape as any).textOnArc && (
               <>
                 <div style={{ display: 'flex', gap: 4, marginBottom: 4 }}>
@@ -1304,8 +1405,9 @@ function MultiSelectPanel({ selectedShapes, selectedIds }: { selectedShapes: Sha
 }
 
 export function PropertiesPanel() {
-  const { shapes, selectedIds, canvasSize, setCanvasSize, backgroundColor, setBackgroundColor, gridEnabled, gridSize, setGrid, snapEnabled, setSnap, addShape } = useEditorStore()
+  const { shapes, selectedIds, canvasSize, setCanvasSize, backgroundColor, setBackgroundColor, gridEnabled, gridSize, setGrid, snapEnabled, setSnap, addShape, artboards, activeArtboardId, updateArtboard, removeArtboard, setActiveArtboard, commit } = useEditorStore()
   const selectedShapes = shapes.filter((s) => selectedIds.includes(s.id))
+  const activeArtboard = artboards.find((a) => a.id === activeArtboardId) ?? null
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   function handleImportSVG(e: React.ChangeEvent<HTMLInputElement>) {
@@ -1325,7 +1427,58 @@ export function PropertiesPanel() {
 
   return (
     <div className="panel h-full overflow-y-auto" style={{ width: 220, flexShrink: 0, borderLeft: '1px solid var(--border)', borderRight: 'none' }}>
-      {selectedShapes.length === 0 ? (
+      {selectedShapes.length === 0 && activeArtboard ? (
+        // Artboard properties
+        <div>
+          <div className="panel-section">
+            <div className="panel-label">Artboard</div>
+            <div style={{ marginBottom: 6 }}>
+              <div style={{ fontSize: 10, color: 'var(--text-dim)', marginBottom: 2 }}>Name</div>
+              <input
+                className="input-field"
+                value={activeArtboard.name}
+                onChange={(e) => updateArtboard(activeArtboard.id, { name: e.target.value })}
+                onBlur={() => commit()}
+                onKeyDown={(e) => { if (e.key === 'Enter') { commit(); e.currentTarget.blur() } }}
+                style={{ width: '100%' }}
+              />
+            </div>
+            <div className="flex gap-1 mb-2">
+              <div className="flex-1">
+                <div style={{ fontSize: 10, color: 'var(--text-dim)', marginBottom: 2 }}>X</div>
+                <input type="number" className="input-field" value={Math.round(activeArtboard.x)}
+                  onChange={(e) => updateArtboard(activeArtboard.id, { x: parseFloat(e.target.value) || 0 })}
+                  onBlur={() => commit()} />
+              </div>
+              <div className="flex-1">
+                <div style={{ fontSize: 10, color: 'var(--text-dim)', marginBottom: 2 }}>Y</div>
+                <input type="number" className="input-field" value={Math.round(activeArtboard.y)}
+                  onChange={(e) => updateArtboard(activeArtboard.id, { y: parseFloat(e.target.value) || 0 })}
+                  onBlur={() => commit()} />
+              </div>
+            </div>
+            <div className="flex gap-1 mb-2">
+              <div className="flex-1">
+                <div style={{ fontSize: 10, color: 'var(--text-dim)', marginBottom: 2 }}>W</div>
+                <input type="number" className="input-field" value={Math.round(activeArtboard.width)}
+                  onChange={(e) => updateArtboard(activeArtboard.id, { width: Math.max(1, parseFloat(e.target.value) || 1) })}
+                  onBlur={() => commit()} />
+              </div>
+              <div className="flex-1">
+                <div style={{ fontSize: 10, color: 'var(--text-dim)', marginBottom: 2 }}>H</div>
+                <input type="number" className="input-field" value={Math.round(activeArtboard.height)}
+                  onChange={(e) => updateArtboard(activeArtboard.id, { height: Math.max(1, parseFloat(e.target.value) || 1) })}
+                  onBlur={() => commit()} />
+              </div>
+            </div>
+            <button
+              style={{ width: '100%', padding: '4px 0', background: 'rgba(220,60,60,0.15)', border: '1px solid rgba(220,60,60,0.4)', borderRadius: 4, color: '#ff8888', fontSize: 11, cursor: 'pointer' }}
+              onClick={() => { removeArtboard(activeArtboard.id); setActiveArtboard(null) }}>
+              Delete Artboard
+            </button>
+          </div>
+        </div>
+      ) : selectedShapes.length === 0 ? (
         // Canvas properties
         <div>
           <div className="panel-section">

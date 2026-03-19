@@ -11,6 +11,40 @@ import type { SnapGuide } from '../../utils/smartSnap'
 import { samplePath, type PathSample } from '../../utils/brushPath'
 import type { BrushDef } from '../../utils/brushPath'
 
+// Catmull-Rom → cubic bezier path (for freehand pencil smoothing)
+function catmullRomToPath(pts: { x: number; y: number }[]): string {
+  if (pts.length < 2) return ''
+  const r = (n: number) => Math.round(n * 100) / 100
+  let d = `M ${r(pts[0].x)} ${r(pts[0].y)}`
+  const p = (i: number) => pts[Math.max(0, Math.min(i, pts.length - 1))]
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = p(i - 1), p1 = p(i), p2 = p(i + 1), p3 = p(i + 2)
+    const cp1x = p1.x + (p2.x - p0.x) / 6
+    const cp1y = p1.y + (p2.y - p0.y) / 6
+    const cp2x = p2.x - (p3.x - p1.x) / 6
+    const cp2y = p2.y - (p3.y - p1.y) / 6
+    d += ` C ${r(cp1x)} ${r(cp1y)} ${r(cp2x)} ${r(cp2y)} ${r(p2.x)} ${r(p2.y)}`
+  }
+  return d
+}
+
+// Douglas-Peucker on raw points
+function rdpPoints(pts: { x: number; y: number }[], tol: number): { x: number; y: number }[] {
+  if (pts.length <= 2) return pts
+  let maxD = 0, maxI = 0
+  const a = pts[0], b = pts[pts.length - 1]
+  const dx = b.x - a.x, dy = b.y - a.y
+  const len2 = dx * dx + dy * dy
+  for (let i = 1; i < pts.length - 1; i++) {
+    const d = len2 === 0
+      ? Math.hypot(pts[i].x - a.x, pts[i].y - a.y)
+      : Math.abs((pts[i].x - a.x) * dy - (pts[i].y - a.y) * dx) / Math.sqrt(len2)
+    if (d > maxD) { maxD = d; maxI = i }
+  }
+  if (maxD > tol) return [...rdpPoints(pts.slice(0, maxI + 1), tol).slice(0, -1), ...rdpPoints(pts.slice(maxI), tol)]
+  return [a, b]
+}
+
 // Module-level clipboard (survives re-renders)
 let svgClipboard: Shape[] = []
 let svgPasteOffset = 8
@@ -67,6 +101,8 @@ function makeShape(type: string, x1: number, y1: number, x2: number, y2: number,
       return { ...DEFAULT_SHAPE_PROPS, type: 'line', x1, y1, x2, y2, fill: 'none', stroke: '#e94560', strokeWidth: 2, name: 'Line' }
     case 'text':
       return { ...DEFAULT_SHAPE_PROPS, type: 'text', x: x1, y: y1, text: 'Text', fontSize: Math.max(8, canvasW / 8), fontFamily: 'sans-serif', fontWeight: 'normal', textAnchor: 'start', name: 'Text', fill: '#ffffff' }
+    case 'areatext':
+      return { ...DEFAULT_SHAPE_PROPS, type: 'text', x: x1, y: y1, text: 'Area Text', fontSize: Math.max(6, canvasW / 12), fontFamily: 'sans-serif', fontWeight: 'normal', textAnchor: 'start', name: 'Area Text', fill: '#ffffff', textWidth: Math.max(10, w), textHeight: Math.max(10, h) } as any
     case 'polygon':
       return { ...DEFAULT_SHAPE_PROPS, type: 'polygon', cx, cy, size, sides: 6, innerRadius: 0, isStar: false, name: 'Polygon' }
     case 'star':
@@ -91,6 +127,8 @@ export function SVGCanvas() {
   const [presetGhost, setPresetGhost] = useState<{ x: number; y: number } | null>(null)
   const [charEditId, setCharEditId] = useState<string | null>(null)
   const [selectedCharIndex, setSelectedCharIndex] = useState<number>(0)
+  const [editingArtboardNameId, setEditingArtboardNameId] = useState<string | null>(null)
+  const artboardDragRef = useRef<{ id: string; startX: number; startY: number; origX: number; origY: number; origW: number; origH: number; handle: string } | null>(null)
   const nodeHandleDragRef = useRef<{
     pathId: string
     pointIndex: number
@@ -129,6 +167,14 @@ export function SVGCanvas() {
     samples: PathSample[]
   } | null>(null)
 
+  // Pencil (freehand) tool
+  const pencilPointsRef = useRef<{ x: number; y: number }[]>([])
+  const [pencilPreview, setPencilPreview] = useState<string | null>(null)
+
+  // Eraser tool
+  const [eraserPos, setEraserPos] = useState<{ x: number; y: number } | null>(null)
+  const eraserActiveRef = useRef(false)
+
   const store = useEditorStore()
   const {
     shapes, layerOrder, selectedIds, activeTool,
@@ -138,6 +184,7 @@ export function SVGCanvas() {
     draggingPreset, setDraggingPreset, setActiveTool,
     guides, removeGuide, updateGuide,
     artboards, activeArtboardId,
+    addArtboard, removeArtboard, updateArtboard, setActiveArtboard,
     editingNodePathId, setEditingNodePathId, selectedNodeIndex, setSelectedNodeIndex,
   } = store
 
@@ -249,6 +296,22 @@ export function SVGCanvas() {
       penAltBreakRef.current = e.altKey
       ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
       updatePenPreview(x, y)
+      return
+    }
+
+    // Pencil freehand
+    if (activeTool === 'pencil') {
+      clearSelection()
+      pencilPointsRef.current = [{ x: pt.x, y: pt.y }]
+      ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+      return
+    }
+
+    // Eraser
+    if (activeTool === 'eraser') {
+      eraserActiveRef.current = true
+      setEraserPos({ x: pt.x, y: pt.y })
+      ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
       return
     }
 
@@ -444,6 +507,61 @@ export function SVGCanvas() {
       return
     }
 
+    // Artboard drag/resize
+    if (artboardDragRef.current) {
+      const { id, startX, startY, origX, origY, origW, origH, handle } = artboardDragRef.current
+      const dx = pt.x - startX
+      const dy = pt.y - startY
+      const MIN = 10
+      if (handle === 'move') {
+        updateArtboard(id, { x: origX + dx, y: origY + dy })
+      } else if (handle === 'se') { updateArtboard(id, { width: Math.max(MIN, origW + dx), height: Math.max(MIN, origH + dy) })
+      } else if (handle === 'sw') { updateArtboard(id, { x: origX + dx, width: Math.max(MIN, origW - dx), height: Math.max(MIN, origH + dy) })
+      } else if (handle === 'ne') { updateArtboard(id, { y: origY + dy, width: Math.max(MIN, origW + dx), height: Math.max(MIN, origH - dy) })
+      } else if (handle === 'nw') { updateArtboard(id, { x: origX + dx, y: origY + dy, width: Math.max(MIN, origW - dx), height: Math.max(MIN, origH - dy) })
+      } else if (handle === 'n') { updateArtboard(id, { y: origY + dy, height: Math.max(MIN, origH - dy) })
+      } else if (handle === 's') { updateArtboard(id, { height: Math.max(MIN, origH + dy) })
+      } else if (handle === 'e') { updateArtboard(id, { width: Math.max(MIN, origW + dx) })
+      } else if (handle === 'w') { updateArtboard(id, { x: origX + dx, width: Math.max(MIN, origW - dx) })
+      }
+      didMoveRef.current = true
+      return
+    }
+
+    // Pencil freehand
+    if (activeTool === 'pencil' && pencilPointsRef.current.length > 0) {
+      const last = pencilPointsRef.current[pencilPointsRef.current.length - 1]
+      const dist = Math.hypot(pt.x - last.x, pt.y - last.y)
+      if (dist > 1 / zoom) {
+        pencilPointsRef.current = [...pencilPointsRef.current, { x: pt.x, y: pt.y }]
+        if (pencilPointsRef.current.length >= 2) {
+          setPencilPreview(catmullRomToPath(pencilPointsRef.current))
+        }
+      }
+      return
+    }
+
+    // Eraser cursor tracking
+    if (activeTool === 'eraser') {
+      setEraserPos({ x: pt.x, y: pt.y })
+    }
+
+    // Eraser active (mouse held)
+    if (activeTool === 'eraser' && eraserActiveRef.current) {
+      setEraserPos({ x: pt.x, y: pt.y })
+      const r = 8 / zoom
+      const toDelete = shapes.filter((s) => {
+        if (s.locked || !s.visible) return false
+        const b = getShapeBBox(s)
+        const cx2 = b.x + b.width / 2, cy2 = b.y + b.height / 2
+        return Math.hypot(pt.x - cx2, pt.y - cy2) < r + Math.max(b.width, b.height) / 2
+      })
+      if (toDelete.length > 0) {
+        useEditorStore.getState().deleteShapes(toDelete.map((s) => s.id))
+      }
+      return
+    }
+
     if (!pointerDownRef.current && !drag) return
 
     didMoveRef.current = true
@@ -624,6 +742,15 @@ export function SVGCanvas() {
       return
     }
 
+    // Artboard drag/resize end
+    if (artboardDragRef.current) {
+      if (didMoveRef.current) commit()
+      artboardDragRef.current = null
+      didMoveRef.current = false
+      pointerDownRef.current = null
+      return
+    }
+
     if (!drawing?.isDrawing || !pointerDownRef.current) {
       pointerDownRef.current = null
       return
@@ -660,18 +787,59 @@ export function SVGCanvas() {
       return
     }
 
+    // Pencil freehand finalize
+    if (activeTool === 'pencil') {
+      const rawPts = pencilPointsRef.current
+      if (rawPts.length >= 2) {
+        const simplified = rdpPoints(rawPts, 1.5 / zoom)
+        const d = catmullRomToPath(simplified)
+        const id = addShape({ ...DEFAULT_SHAPE_PROPS, type: 'path', d, fill: 'none', stroke: DEFAULT_SHAPE_PROPS.stroke, strokeWidth: 2, name: 'Pencil' } as any)
+        useEditorStore.getState().setSelectedIds([id])
+        commit()
+      }
+      pencilPointsRef.current = []
+      setPencilPreview(null)
+      pointerDownRef.current = null
+      useEditorStore.getState().setActiveTool('select')
+      return
+    }
+
+    // Eraser finalize
+    if (activeTool === 'eraser') {
+      eraserActiveRef.current = false
+      setEraserPos(null)
+      pointerDownRef.current = null
+      return
+    }
+
+    // Frame tool creates artboards, not shapes
+    if (activeTool === 'frame') {
+      const x = Math.min(startX, currentX)
+      const y = Math.min(startY, currentY)
+      const w = Math.abs(currentX - startX)
+      const h = Math.abs(currentY - startY)
+      if (w > 4 && h > 4) {
+        const n = artboards.length + 1
+        const id = addArtboard({ x, y, width: w, height: h, name: `Artboard ${n}` })
+        setActiveArtboard(id)
+        useEditorStore.getState().setActiveTool('select')
+      }
+      setDrawing(null)
+      pointerDownRef.current = null
+      return
+    }
+
     const newShape = makeShape(activeTool, startX, startY, currentX, currentY, canvasSize.width, canvasSize.height)
     if (newShape) {
       const id = addShape(newShape)
-      if (activeTool === 'text') {
-        // Immediately enter text editing mode and switch to select tool
+      if (activeTool === 'text' || activeTool === 'areatext') {
         useEditorStore.getState().setActiveTool('select')
         useEditorStore.getState().setEditingTextId(id)
       }
     }
     setDrawing(null)
     pointerDownRef.current = null
-  }, [drawing, activeTool, drag, setDrawing, setDrag, addShape, canvasSize, commit, snapXY, shapes, setSelectedIds, finalizePenPath, updatePenPreview])
+  }, [drawing, activeTool, drag, setDrawing, setDrag, addShape, canvasSize, commit, snapXY, shapes, setSelectedIds, finalizePenPath, updatePenPreview, artboards, addArtboard, setActiveArtboard])
 
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
     if (activeTool === 'path') {
@@ -811,7 +979,15 @@ export function SVGCanvas() {
         }
         return
       }
+      // Delete selected artboard
+      if ((e.key === 'Delete' || e.key === 'Backspace') && activeArtboardId && selectedIds.length === 0) {
+        removeArtboard(activeArtboardId)
+        setActiveArtboard(null)
+        return
+      }
+
       if (e.key === 'Escape') {
+        if (editingArtboardNameId) { setEditingArtboardNameId(null); return }
         if (charEditId) { setCharEditId(null); return }
         if (editingNodePathId) { setEditingNodePathId(null); setSelectedNodeIndex(null); return }
         if (useEditorStore.getState().activeTool === 'path') {
@@ -874,7 +1050,7 @@ export function SVGCanvas() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [selectedIds, shapes, clearSelection, drawing, setDrawing, setSelectedIds, draggingPreset, setDraggingPreset, editingNodePathId, selectedNodeIndex, charEditId, selectedCharIndex, finalizePenPath, updatePenPreview])
+  }, [selectedIds, shapes, clearSelection, drawing, setDrawing, setSelectedIds, draggingPreset, setDraggingPreset, editingNodePathId, selectedNodeIndex, charEditId, selectedCharIndex, finalizePenPath, updatePenPreview, activeArtboardId, removeArtboard, setActiveArtboard, editingArtboardNameId])
 
   // Finalize in-progress bezier path when switching away from the path tool
   const prevToolRef = useRef<string>(activeTool)
@@ -1085,17 +1261,70 @@ export function SVGCanvas() {
         </defs>
 
         {/* Artboards */}
-        {artboards.map((ab) => (
-          <g key={ab.id} pointerEvents="none">
-            <rect x={ab.x} y={ab.y} width={ab.width} height={ab.height}
-              fill="none"
-              stroke={activeArtboardId === ab.id ? 'rgba(100,160,255,0.9)' : 'rgba(100,100,200,0.35)'}
-              strokeWidth={1 / zoom} />
-            <text x={ab.x} y={ab.y - 3 / zoom}
-              fontSize={9 / zoom} fill={activeArtboardId === ab.id ? 'rgba(100,160,255,0.9)' : 'rgba(100,100,200,0.6)'}
-              fontFamily="monospace">{ab.name}</text>
-          </g>
-        ))}
+        {artboards.map((ab) => {
+          const isActive = activeArtboardId === ab.id
+          const color = isActive ? 'rgba(100,160,255,1)' : 'rgba(120,120,200,0.5)'
+          const hw = 4 / zoom  // handle half-size
+          const handles = [
+            { id: 'nw', cx: ab.x,               cy: ab.y,                cursor: 'nw-resize' },
+            { id: 'n',  cx: ab.x + ab.width / 2, cy: ab.y,               cursor: 'n-resize' },
+            { id: 'ne', cx: ab.x + ab.width,     cy: ab.y,               cursor: 'ne-resize' },
+            { id: 'e',  cx: ab.x + ab.width,     cy: ab.y + ab.height / 2, cursor: 'e-resize' },
+            { id: 'se', cx: ab.x + ab.width,     cy: ab.y + ab.height,   cursor: 'se-resize' },
+            { id: 's',  cx: ab.x + ab.width / 2, cy: ab.y + ab.height,   cursor: 's-resize' },
+            { id: 'sw', cx: ab.x,               cy: ab.y + ab.height,    cursor: 'sw-resize' },
+            { id: 'w',  cx: ab.x,               cy: ab.y + ab.height / 2, cursor: 'w-resize' },
+          ]
+          return (
+            <g key={ab.id}>
+              {/* Background hit area for selecting/moving */}
+              <rect x={ab.x} y={ab.y} width={ab.width} height={ab.height}
+                fill="transparent" stroke="none" pointerEvents="all"
+                style={{ cursor: activeTool === 'select' ? 'move' : 'default' }}
+                onPointerDown={(e) => {
+                  if (activeTool !== 'select') return
+                  e.stopPropagation()
+                  setActiveArtboard(ab.id)
+                  clearSelection()
+                  const pt2 = toCanvas(e)
+                  artboardDragRef.current = { id: ab.id, startX: pt2.x, startY: pt2.y, origX: ab.x, origY: ab.y, origW: ab.width, origH: ab.height, handle: 'move' }
+                  ;(e.currentTarget as SVGElement).closest('svg')?.parentElement?.setPointerCapture(e.pointerId)
+                }}
+              />
+              {/* Border */}
+              <rect x={ab.x} y={ab.y} width={ab.width} height={ab.height}
+                fill="none" stroke={color} strokeWidth={1 / zoom} pointerEvents="none" />
+              {/* Name label */}
+              {editingArtboardNameId === ab.id ? null : (
+                <text x={ab.x} y={ab.y - 3 / zoom}
+                  fontSize={9 / zoom} fill={color} fontFamily="sans-serif"
+                  pointerEvents={isActive ? 'all' : 'none'}
+                  style={{ cursor: 'text', userSelect: 'none' }}
+                  onPointerDown={(e) => { if (isActive) e.stopPropagation() }}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation()
+                    setEditingArtboardNameId(ab.id)
+                  }}>
+                  {ab.name}
+                </text>
+              )}
+              {/* Resize handles — only when active */}
+              {isActive && handles.map((h) => (
+                <rect key={h.id}
+                  x={h.cx - hw} y={h.cy - hw} width={hw * 2} height={hw * 2}
+                  fill="#fff" stroke="rgba(100,160,255,0.9)" strokeWidth={0.8 / zoom}
+                  style={{ cursor: h.cursor }} pointerEvents="all"
+                  onPointerDown={(e) => {
+                    e.stopPropagation()
+                    const pt2 = toCanvas(e)
+                    artboardDragRef.current = { id: ab.id, startX: pt2.x, startY: pt2.y, origX: ab.x, origY: ab.y, origW: ab.width, origH: ab.height, handle: h.id }
+                    ;(e.currentTarget as SVGElement).closest('svg')?.parentElement?.setPointerCapture(e.pointerId)
+                  }}
+                />
+              ))}
+            </g>
+          )
+        })}
 
         {orderedShapes.map((shape) => {
           const clipSource = shape.clippedBy ? shapes.find((s) => s.id === shape.clippedBy) : undefined
@@ -1113,6 +1342,18 @@ export function SVGCanvas() {
         })}
 
         {drawingPreview}
+
+        {/* Pencil freehand preview */}
+        {pencilPreview && (
+          <path d={pencilPreview} fill="none" stroke="#e94560" strokeWidth={2 / zoom} pointerEvents="none" strokeLinecap="round" strokeLinejoin="round" />
+        )}
+
+        {/* Eraser cursor */}
+        {eraserPos && activeTool === 'eraser' && (
+          <circle cx={eraserPos.x} cy={eraserPos.y} r={8 / zoom}
+            fill="rgba(255,255,255,0.15)" stroke="rgba(255,255,255,0.8)" strokeWidth={1 / zoom}
+            pointerEvents="none" />
+        )}
 
         {/* Pen tool live preview */}
         {activeTool === 'path' && penPreview && (() => {
@@ -1584,6 +1825,34 @@ export function SVGCanvas() {
                 )
               })}
             </g>
+          )
+        })()}
+
+        {/* Artboard name editor */}
+        {editingArtboardNameId && (() => {
+          const ab = artboards.find((a) => a.id === editingArtboardNameId)
+          if (!ab) return null
+          const fontSize = 9 / zoom
+          return (
+            <foreignObject x={ab.x} y={ab.y - fontSize * 2 - 2 / zoom} width={Math.max(60, ab.name.length * fontSize * 0.7 + 20)} height={fontSize * 2.5}>
+              <div style={{ width: '100%', height: '100%' }}>
+                <input
+                  autoFocus
+                  defaultValue={ab.name}
+                  style={{
+                    width: '100%', background: 'rgba(20,30,50,0.95)', color: '#a0c8ff',
+                    border: '1px solid rgba(100,160,255,0.6)', borderRadius: 2,
+                    fontSize: `${fontSize}px`, padding: '1px 3px', outline: 'none',
+                  }}
+                  onBlur={(e) => { updateArtboard(ab.id, { name: e.target.value || ab.name }); setEditingArtboardNameId(null); commit() }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') { updateArtboard(ab.id, { name: e.currentTarget.value || ab.name }); setEditingArtboardNameId(null); commit() }
+                    if (e.key === 'Escape') setEditingArtboardNameId(null)
+                    e.stopPropagation()
+                  }}
+                />
+              </div>
+            </foreignObject>
           )
         })()}
 

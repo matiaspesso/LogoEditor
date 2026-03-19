@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
 import { nanoid } from 'nanoid'
-import type { Shape, ToolType, BBox, Guide, Artboard } from '../types/shapes'
+import type { Shape, ToolType, BBox, Guide, Artboard, GraphicStyle } from '../types/shapes'
 import type { ShapePreset } from '../data/shapePresets'
 import { getShapeBBox, moveShape } from '../utils/geometry'
 import { applyBooleanOp, type BooleanOpType } from '../utils/booleanOps'
@@ -63,6 +63,7 @@ interface EditorState {
   activeArtboardId: string | null
   editingNodePathId: string | null
   selectedNodeIndex: number | null
+  graphicStyles: GraphicStyle[]
 
   // Actions
   addShape: (shape: Omit<Shape, 'id'>) => string
@@ -105,7 +106,7 @@ interface EditorState {
   addGuide: (g: Guide) => void
   removeGuide: (id: string) => void
   updateGuide: (id: string, position: number) => void
-  addArtboard: (a: Omit<Artboard, 'id'>) => void
+  addArtboard: (a: Omit<Artboard, 'id'>) => string
   removeArtboard: (id: string) => void
   updateArtboard: (id: string, partial: Partial<Artboard>) => void
   setActiveArtboard: (id: string | null) => void
@@ -113,6 +114,9 @@ interface EditorState {
   setSelectedNodeIndex: (i: number | null) => void
   createBlend: (id1: string, id2: string, steps: number) => string
   expandBlend: (blendId: string) => void
+  addGraphicStyle: (style: Omit<GraphicStyle, 'id'>) => void
+  removeGraphicStyle: (id: string) => void
+  applyGraphicStyle: (shapeId: string, styleId: string) => void
 }
 
 export const useEditorStore = create<EditorState>()(
@@ -144,6 +148,7 @@ export const useEditorStore = create<EditorState>()(
     activeArtboardId: null,
     editingNodePathId: null,
     selectedNodeIndex: null,
+    graphicStyles: [],
 
     addShape: (shapeData) => {
       const id = nanoid(8)
@@ -414,7 +419,7 @@ export const useEditorStore = create<EditorState>()(
     removeGuide: (id) => set((s) => { s.guides = s.guides.filter((g) => g.id !== id) }),
     updateGuide: (id, position) => set((s) => { const g = s.guides.find((g) => g.id === id); if (g) g.position = position }),
 
-    addArtboard: (a) => set((s) => { s.artboards.push({ ...a, id: nanoid(8) }) }),
+    addArtboard: (a) => { const id = nanoid(8); set((s) => { s.artboards.push({ ...a, id }) }); return id },
     removeArtboard: (id) => set((s) => { s.artboards = s.artboards.filter((a) => a.id !== id) }),
     updateArtboard: (id, partial) => set((s) => { const a = s.artboards.find((a) => a.id === id); if (a) Object.assign(a, partial) }),
     setActiveArtboard: (id) => set((s) => { s.activeArtboardId = id }),
@@ -471,6 +476,16 @@ export const useEditorStore = create<EditorState>()(
           st.layerOrder.splice(blendIdx + i, 0, newId)
         })
       })
+      get().commit()
+    },
+
+    addGraphicStyle: (style) => set((s) => { s.graphicStyles.push({ ...style, id: nanoid(8) }) }),
+    removeGraphicStyle: (id) => set((s) => { s.graphicStyles = s.graphicStyles.filter((gs) => gs.id !== id) }),
+    applyGraphicStyle: (shapeId, styleId) => {
+      const style = get().graphicStyles.find((gs) => gs.id === styleId)
+      if (!style) return
+      const { id: _id, name: _name, ...props } = style
+      set((s) => { const shape = s.shapes.find((sh) => sh.id === shapeId); if (shape) Object.assign(shape, props) })
       get().commit()
     },
 

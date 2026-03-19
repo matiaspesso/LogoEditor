@@ -327,6 +327,39 @@ export function ColorPicker({ value, onChange, onCommit, onClose, anchorRef }: P
           />
         ))}
       </div>
+
+      {/* Color harmonies */}
+      <ColorHarmonies hsva={hsva} onPick={(h) => { const next = { ...h, a: hsva.a }; setHsva(next); emit(next); onCommit?.() }} />
+    </div>
+  )
+}
+
+function ColorHarmonies({ hsva, onPick }: { hsva: HSVA; onPick: (h: HSVA) => void }) {
+  const harmonies: { label: string; offsets: number[] }[] = [
+    { label: 'Complementary', offsets: [180] },
+    { label: 'Analogous', offsets: [-30, 30] },
+    { label: 'Triadic', offsets: [120, 240] },
+    { label: 'Split-Comp', offsets: [150, 210] },
+    { label: 'Tetradic', offsets: [90, 180, 270] },
+  ]
+  const swatch = (h: HSVA) => (
+    <button
+      key={h.h}
+      title={hsvaToHex(h)}
+      onClick={() => onPick(h)}
+      style={{ width: 18, height: 18, borderRadius: 3, background: hsvaToRgbaStr(h), border: '1px solid rgba(255,255,255,0.2)', cursor: 'pointer', padding: 0, flexShrink: 0 }}
+    />
+  )
+  return (
+    <div style={{ marginTop: 8, borderTop: '1px solid var(--border, rgba(255,255,255,0.1))', paddingTop: 6 }}>
+      <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', marginBottom: 4 }}>Harmonies</div>
+      {harmonies.map(({ label, offsets }) => (
+        <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 3 }}>
+          <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.4)', width: 68, flexShrink: 0 }}>{label}</span>
+          {swatch(hsva)}
+          {offsets.map((o) => swatch({ ...hsva, h: (hsva.h + o + 360) % 360 }))}
+        </div>
+      ))}
     </div>
   )
 }

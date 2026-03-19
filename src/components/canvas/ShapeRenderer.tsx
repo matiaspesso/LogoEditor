@@ -38,8 +38,9 @@ function renderFilterDef(id: string, f: ShapeFilters): React.ReactElement | null
   const blur = f.blur?.enabled ? f.blur : null
   const innerShadow = f.innerShadow?.enabled ? f.innerShadow : null
   const glow = f.glow?.enabled ? f.glow : null
+  const feather = f.feather?.enabled ? f.feather : null
 
-  if (!shadow && !blur && !innerShadow && !glow) return null
+  if (!shadow && !blur && !innerShadow && !glow && !feather) return null
 
   const fid = `fx-${id}`
   const prims: React.ReactElement[] = []
@@ -84,6 +85,21 @@ function renderFilterDef(id: string, f: ShapeFilters): React.ReactElement | null
       <feComposite key="iout" in="ic1" in2="SourceAlpha" operator="in" result="iout" />,
     )
     mergeInputs.push('iout')
+  }
+
+  // Feather: soft edges by blurring alpha and using as mask
+  if (feather) {
+    // Use a completely separate feather-only filter — overrides merge
+    return (
+      <filter id={fid} {...SHADOW_REGION}>
+        {prims}
+        {mergeInputs.length > 1
+          ? <feMerge>{mergeInputs.map((inp, i) => <feMergeNode key={i} in={inp} />)}</feMerge>
+          : null}
+        <feGaussianBlur key="feablu" in="SourceAlpha" stdDeviation={feather.amount} result="feaBlu" />
+        <feComposite key="feaout" in={mergeInputs.length > 0 ? 'result' : 'SourceGraphic'} in2="feaBlu" operator="in" />
+      </filter>
+    )
   }
 
   return (
@@ -193,6 +209,7 @@ function renderMarkerDef(shape: Shape): React.ReactElement | null {
 export function ShapeRenderer({ shape, isSelected, onPointerDown, activeTool, isEditing, clipSource }: Props) {
   if (isEditing) return null
   if (shape.isClipSource) return null  // clip sources are rendered inside <clipPath>, not directly
+  if (!shape.visible) return null       // hidden in layers panel
   const isSelectTool = activeTool === 'select'
   const pe = isSelectTool ? 'all' : 'none'
 
@@ -402,6 +419,37 @@ export function ShapeRenderer({ shape, isSelected, onPointerDown, activeTool, is
           </>
         ) as unknown as React.ReactElement
       }
+      // Area text: word-wrap inside textWidth
+      const textWidth: number | undefined = (shape as any).textWidth
+      if (textWidth) {
+        const cvs = document.createElement('canvas')
+        const ctx2 = cvs.getContext('2d')!
+        ctx2.font = `${shape.fontWeight} ${shape.fontSize}px ${shape.fontFamily}`
+        const words = shape.text.split(' ')
+        const lineH = shape.fontSize * 1.3
+        const lines: string[] = []
+        let cur = ''
+        for (const word of words) {
+          const test = cur ? `${cur} ${word}` : word
+          if (ctx2.measureText(test).width > textWidth && cur) { lines.push(cur); cur = word }
+          else cur = test
+        }
+        if (cur) lines.push(cur)
+        return wrapWithDefs(
+          <text
+            x={shape.x} y={shape.y}
+            fontSize={shape.fontSize} fontFamily={shape.fontFamily} fontWeight={shape.fontWeight}
+            textAnchor={shape.textAnchor} letterSpacing={ls || undefined} dominantBaseline="auto"
+            {...common}
+          >
+            {/* Area text bounding box indicator */}
+            {lines.map((line, i) => (
+              <tspan key={i} x={shape.x} dy={i === 0 ? 0 : lineH}>{line}</tspan>
+            ))}
+          </text>
+        )
+      }
+
       return wrapWithDefs(
         <text
           x={shape.x} y={shape.y}

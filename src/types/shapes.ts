@@ -63,11 +63,30 @@ export interface BrushDef {
   artDesign?: 'bristle' | 'rope' | 'charcoal'
 }
 
+export interface FeatherEffect {
+  enabled: boolean
+  amount: number   // blur radius in SVG units
+}
+
 export interface ShapeFilters {
   shadow?: DropShadow
   blur?: BlurEffect
   innerShadow?: InnerShadow
   glow?: GlowEffect
+  feather?: FeatherEffect
+}
+
+export interface GraphicStyle {
+  id: string
+  name: string
+  fill: string
+  fillOpacity: number
+  stroke: string
+  strokeWidth: number
+  opacity: number
+  gradientFill?: GradientFill
+  patternFill?: PatternFill
+  filters?: ShapeFilters
 }
 
 export type ToolType =
@@ -77,7 +96,10 @@ export type ToolType =
   | 'ellipse'
   | 'line'
   | 'path'
+  | 'pencil'
+  | 'eraser'
   | 'text'
+  | 'areatext'
   | 'polygon'
   | 'star'
   | 'frame'
@@ -192,6 +214,8 @@ export interface TextShape extends BaseShape {
   letterSpacing?: number
   charOffsets?: number[]   // per-character cumulative x offset (index i = how far char i is from its natural position)
   charOffsetsY?: number[]  // per-character cumulative y offset (positive = downward / inward for arc text)
+  textWidth?: number       // if set, text wraps inside this width (area text)
+  textHeight?: number      // optional max height for area text
   textOnArc?: boolean
   arcRadius?: number
   arcDirection?: 'up' | 'down'
