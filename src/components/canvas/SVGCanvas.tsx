@@ -5,7 +5,7 @@ import { SelectionOverlay } from './SelectionOverlay'
 import { getSelectionBBox, getShapeBBox, svgPointFromEvent, snap, moveShape, polygonPoints } from '../../utils/geometry'
 import { computeSmartSnap } from '../../utils/smartSnap'
 import { parseSimplePath, serializeSimplePath, isSimplePath } from '../../utils/pathUtils'
-import { parseBezierPath, serializeBezierPath, isBezierPath, mirrorHandle, type BezierNode } from '../../utils/bezierPathUtils'
+import { parseBezierPath, serializeBezierPath, isBezierPath, mirrorHandle, applyHandleConstraint, autoSmoothNode, applyAutoSmooth, type BezierNode, type NodeType } from '../../utils/bezierPathUtils'
 import type { Shape } from '../../types/shapes'
 import type { SnapGuide } from '../../utils/smartSnap'
 
@@ -87,8 +87,6 @@ export function SVGCanvas() {
   const shiftHeldRef = useRef(false)
   const [snapGuides, setSnapGuides] = useState<SnapGuide[]>([])
   const [presetGhost, setPresetGhost] = useState<{ x: number; y: number } | null>(null)
-  const [editingNodePathId, setEditingNodePathId] = useState<string | null>(null)
-  const [selectedNodeIndex, setSelectedNodeIndex] = useState<number | null>(null)
   const [charEditId, setCharEditId] = useState<string | null>(null)
   const [selectedCharIndex, setSelectedCharIndex] = useState<number>(0)
   const nodeHandleDragRef = useRef<{
@@ -107,6 +105,7 @@ export function SVGCanvas() {
     field: 'anchor' | 'cp1' | 'cp2'
     origNodes: BezierNode[]
     closed: boolean
+    breakTangent: boolean
   } | null>(null)
 
   const store = useEditorStore()
@@ -118,6 +117,7 @@ export function SVGCanvas() {
     draggingPreset, setDraggingPreset, setActiveTool,
     guides, removeGuide, updateGuide,
     artboards, activeArtboardId,
+    editingNodePathId, setEditingNodePathId, selectedNodeIndex, setSelectedNodeIndex,
   } = store
 
   const orderedShapes = layerOrder
@@ -180,6 +180,7 @@ export function SVGCanvas() {
         cp1x: snapped.x, cp1y: snapped.y,
         cp2x: snapped.x, cp2y: snapped.y,
         smooth: true,
+        nodeType: 'corner',  // becomes 'symmetric' if they drag
       }
       bezierNodesRef.current = [...bezierNodesRef.current, node]
       penDraggingRef.current = true
@@ -305,8 +306,8 @@ export function SVGCanvas() {
 
     // Bezier node handle drag
     if (bezierHandleDragRef.current) {
-      const { pathId, nodeIndex, field, origNodes, closed } = bezierHandleDragRef.current
-      const nodes = origNodes.map((n, i) => {
+      const { pathId, nodeIndex, field, origNodes, closed, breakTangent } = bezierHandleDragRef.current
+      let nodes = origNodes.map((n, i) => {
         if (i !== nodeIndex) return n
         const nn = { ...n }
         if (field === 'anchor') {
@@ -316,12 +317,21 @@ export function SVGCanvas() {
           nn.cp2x += dx; nn.cp2y += dy
         } else if (field === 'cp2') {
           nn.cp2x = snapped.x; nn.cp2y = snapped.y
-          if (n.smooth) { const m = mirrorHandle(n.x, n.y, snapped.x, snapped.y); nn.cp1x = m.x; nn.cp1y = m.y }
+          if (breakTangent) nn.nodeType = 'corner'
         } else {
           nn.cp1x = snapped.x; nn.cp1y = snapped.y
-          if (n.smooth) { const m = mirrorHandle(n.x, n.y, snapped.x, snapped.y); nn.cp2x = m.x; nn.cp2y = m.y }
+          if (breakTangent) nn.nodeType = 'corner'
         }
         return nn
+      })
+      // Apply constraint if not breaking tangent
+      if (!breakTangent && (field === 'cp1' || field === 'cp2')) {
+        nodes = applyHandleConstraint(nodes, nodeIndex, field)
+      }
+      // Re-apply auto-smooth to any auto nodes (except the one being dragged)
+      nodes = nodes.map((n, i) => {
+        if (i === nodeIndex || n.nodeType !== 'auto') return n
+        return autoSmoothNode(nodes, i, closed)
       })
       updateShape(pathId, { d: serializeBezierPath(nodes, closed) } as any)
       return
@@ -334,6 +344,8 @@ export function SVGCanvas() {
       last.cp2x = pt.x; last.cp2y = pt.y
       const mirror = mirrorHandle(last.x, last.y, pt.x, pt.y)
       last.cp1x = mirror.x; last.cp1y = mirror.y
+      last.nodeType = 'symmetric'  // promoted from corner when dragged
+      last.smooth = true
       bezierNodesRef.current = [...nodes.slice(0, -1), last]
       if (drawing) setDrawing({ ...drawing, currentX: pt.x, currentY: pt.y })
       return
@@ -821,7 +833,7 @@ export function SVGCanvas() {
           const nodes = bezierNodesRef.current
           if (nodes.length > 0) {
             // Show committed path + preview segment to cursor
-            const previewNode: BezierNode = { x: currentX, y: currentY, cp1x: currentX, cp1y: currentY, cp2x: currentX, cp2y: currentY, smooth: false }
+            const previewNode: BezierNode = { x: currentX, y: currentY, cp1x: currentX, cp1y: currentY, cp2x: currentX, cp2y: currentY, smooth: false, nodeType: 'corner' }
             const allNodes = [...nodes, previewNode]
             const d = serializeBezierPath(allNodes, false)
             drawingPreview = (
@@ -1065,13 +1077,26 @@ export function SVGCanvas() {
 
           if (isBezierPath(pathShape.d)) {
             const { nodes, closed } = parseBezierPath(pathShape.d)
-            const ar = 3.5 / zoom  // anchor radius
+            const ar = 4 / zoom  // anchor radius
             const hr = 2.5 / zoom  // handle radius
+
+            const nodeColor = (type: NodeType | undefined) => {
+              switch (type) {
+                case 'corner': return '#fff'
+                case 'smooth': return '#88ccff'
+                case 'symmetric': return '#e94560'
+                case 'auto': return '#aaffaa'
+                default: return '#fff'
+              }
+            }
+
             return (
               <g pointerEvents="all">
                 {nodes.map((n, i) => {
                   const hasCP1 = n.cp1x !== n.x || n.cp1y !== n.y
                   const hasCP2 = n.cp2x !== n.x || n.cp2y !== n.y
+                  const isSelected = selectedNodeIndex === i
+                  const ntype: NodeType = n.nodeType ?? (n.smooth ? 'symmetric' : 'corner')
                   return (
                     <g key={i}>
                       {/* Handle lines */}
@@ -1079,35 +1104,67 @@ export function SVGCanvas() {
                       {hasCP2 && <line x1={n.x} y1={n.y} x2={n.cp2x} y2={n.cp2y} stroke="rgba(255,255,255,0.4)" strokeWidth={1 / zoom} pointerEvents="none" />}
                       {/* CP1 handle */}
                       {hasCP1 && (
-                        <circle cx={n.cp1x} cy={n.cp1y} r={hr} fill="#e94560" stroke="#fff" strokeWidth={0.8 / zoom} style={{ cursor: 'move' }}
+                        <circle cx={n.cp1x} cy={n.cp1y} r={hr} fill={nodeColor(ntype)} stroke="#fff" strokeWidth={0.8 / zoom} style={{ cursor: 'crosshair' }}
                           onPointerDown={(e) => {
                             e.stopPropagation()
                             ;(e.currentTarget as SVGElement).closest('svg')?.parentElement?.setPointerCapture(e.pointerId)
-                            bezierHandleDragRef.current = { pathId: editingNodePathId, nodeIndex: i, field: 'cp1', origNodes: nodes, closed }
+                            bezierHandleDragRef.current = { pathId: editingNodePathId!, nodeIndex: i, field: 'cp1', origNodes: nodes, closed, breakTangent: e.altKey }
                           }}
                         />
                       )}
                       {/* CP2 handle */}
                       {hasCP2 && (
-                        <circle cx={n.cp2x} cy={n.cp2y} r={hr} fill="#e94560" stroke="#fff" strokeWidth={0.8 / zoom} style={{ cursor: 'move' }}
+                        <circle cx={n.cp2x} cy={n.cp2y} r={hr} fill={nodeColor(ntype)} stroke="#fff" strokeWidth={0.8 / zoom} style={{ cursor: 'crosshair' }}
                           onPointerDown={(e) => {
                             e.stopPropagation()
                             ;(e.currentTarget as SVGElement).closest('svg')?.parentElement?.setPointerCapture(e.pointerId)
-                            bezierHandleDragRef.current = { pathId: editingNodePathId, nodeIndex: i, field: 'cp2', origNodes: nodes, closed }
+                            bezierHandleDragRef.current = { pathId: editingNodePathId!, nodeIndex: i, field: 'cp2', origNodes: nodes, closed, breakTangent: e.altKey }
                           }}
                         />
                       )}
-                      {/* Anchor */}
-                      <circle cx={n.x} cy={n.y} r={ar}
-                        fill={selectedNodeIndex === i ? '#e94560' : '#fff'}
-                        stroke="#e94560" strokeWidth={1 / zoom} style={{ cursor: 'move' }}
-                        onPointerDown={(e) => {
-                          e.stopPropagation()
-                          setSelectedNodeIndex(i)
-                          ;(e.currentTarget as SVGElement).closest('svg')?.parentElement?.setPointerCapture(e.pointerId)
-                          bezierHandleDragRef.current = { pathId: editingNodePathId, nodeIndex: i, field: 'anchor', origNodes: nodes, closed }
-                        }}
-                      />
+                      {/* Anchor — square for corner, circle for others */}
+                      {ntype === 'corner' ? (
+                        <rect
+                          x={n.x - ar} y={n.y - ar} width={ar * 2} height={ar * 2}
+                          fill={isSelected ? '#e94560' : nodeColor(ntype)}
+                          stroke="#e94560" strokeWidth={1 / zoom} style={{ cursor: 'move' }}
+                          onPointerDown={(e) => {
+                            e.stopPropagation()
+                            if (e.altKey) {
+                              const order: NodeType[] = ['corner', 'smooth', 'symmetric', 'auto']
+                              const next = order[(order.indexOf(ntype) + 1) % order.length]
+                              const newNodes = nodes.map((nn, ii) => ii === i ? { ...nn, nodeType: next, smooth: next !== 'corner' } : nn)
+                              const finalNodes = next === 'auto' ? applyAutoSmooth(newNodes, closed) : newNodes
+                              updateShape(editingNodePathId!, { d: serializeBezierPath(finalNodes, closed) } as any)
+                              commit()
+                              return
+                            }
+                            setSelectedNodeIndex(i)
+                            ;(e.currentTarget as SVGElement).closest('svg')?.parentElement?.setPointerCapture(e.pointerId)
+                            bezierHandleDragRef.current = { pathId: editingNodePathId!, nodeIndex: i, field: 'anchor', origNodes: nodes, closed, breakTangent: false }
+                          }}
+                        />
+                      ) : (
+                        <circle cx={n.x} cy={n.y} r={ar}
+                          fill={isSelected ? '#e94560' : nodeColor(ntype)}
+                          stroke="#e94560" strokeWidth={1 / zoom} style={{ cursor: 'move' }}
+                          onPointerDown={(e) => {
+                            e.stopPropagation()
+                            if (e.altKey) {
+                              const order: NodeType[] = ['corner', 'smooth', 'symmetric', 'auto']
+                              const next = order[(order.indexOf(ntype) + 1) % order.length]
+                              const newNodes = nodes.map((nn, ii) => ii === i ? { ...nn, nodeType: next, smooth: next !== 'corner' } : nn)
+                              const finalNodes = next === 'auto' ? applyAutoSmooth(newNodes, closed) : newNodes
+                              updateShape(editingNodePathId!, { d: serializeBezierPath(finalNodes, closed) } as any)
+                              commit()
+                              return
+                            }
+                            setSelectedNodeIndex(i)
+                            ;(e.currentTarget as SVGElement).closest('svg')?.parentElement?.setPointerCapture(e.pointerId)
+                            bezierHandleDragRef.current = { pathId: editingNodePathId!, nodeIndex: i, field: 'anchor', origNodes: nodes, closed, breakTangent: false }
+                          }}
+                        />
+                      )}
                     </g>
                   )
                 })}

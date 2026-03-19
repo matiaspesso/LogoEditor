@@ -9,6 +9,7 @@ import { textToPath } from '../utils/textToPath'
 import { outlineStroke } from '../utils/outlineStroke'
 import { offsetShape } from '../utils/offsetPath'
 import { simplifyPath } from '../utils/simplifyPath'
+import { parseBezierPath, serializeBezierPath, applyAutoSmooth, autoSmoothNode, isBezierPath, type NodeType } from '../utils/bezierPathUtils'
 
 const DASH_PRESETS = [
   { label: 'Solid',   value: '' },
@@ -925,6 +926,48 @@ function ShapeProperties({ shape }: { shape: Shape }) {
           <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>px</span>
         </div>
       </div>
+
+      {/* Path node type (only when editing a specific node) */}
+      {store.editingNodePathId === shape.id && store.selectedNodeIndex !== null && shape.type === 'path' && isBezierPath((shape as any).d) && (() => {
+        const { nodes, closed } = parseBezierPath((shape as any).d)
+        const i = store.selectedNodeIndex!
+        const node = nodes[i]
+        if (!node) return null
+        const ntype: NodeType = node.nodeType ?? (node.smooth ? 'symmetric' : 'corner')
+        const setType = (t: NodeType) => {
+          const newNodes = nodes.map((n, idx) => idx === i ? { ...n, nodeType: t, smooth: t !== 'corner' } : n)
+          const finalNodes = t === 'auto' ? applyAutoSmooth(newNodes, closed) : newNodes
+          update({ d: serializeBezierPath(finalNodes, closed) } as any)
+        }
+        const types: { t: NodeType; label: string; icon: string }[] = [
+          { t: 'corner', label: 'Corner', icon: '◻' },
+          { t: 'smooth', label: 'Smooth', icon: '⌒' },
+          { t: 'symmetric', label: 'Symmetric', icon: '◉' },
+          { t: 'auto', label: 'Auto', icon: '✦' },
+        ]
+        return (
+          <div className="panel-section">
+            <div className="panel-label">Node Type</div>
+            <div style={{ display: 'flex', gap: 4, marginBottom: 6 }}>
+              {types.map(({ t, label, icon }) => (
+                <button key={t} title={label}
+                  style={{ flex: 1, padding: '4px 0', fontSize: 14, background: ntype === t ? 'rgba(233,69,96,0.3)' : 'rgba(255,255,255,0.06)', border: `1px solid ${ntype === t ? '#e94560' : 'var(--border)'}`, borderRadius: 4, color: 'var(--text)', cursor: 'pointer' }}
+                  onClick={() => setType(t)}
+                >{icon}</button>
+              ))}
+            </div>
+            <button
+              style={{ width: '100%', padding: '4px 0', fontSize: 11, background: 'rgba(255,255,255,0.06)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-dim)', cursor: 'pointer' }}
+              onClick={() => {
+                const allAuto = nodes.map(n => ({ ...n, nodeType: 'auto' as NodeType, smooth: true }))
+                const smoothed = applyAutoSmooth(allAuto, closed)
+                const fullySmoothed = smoothed.map((_, idx) => autoSmoothNode(smoothed, idx, closed))
+                update({ d: serializeBezierPath(fullySmoothed, closed) } as any)
+              }}
+            >Auto-smooth all nodes</button>
+          </div>
+        )
+      })()}
 
       {/* Clip mask status */}
       {shape.clippedBy && (

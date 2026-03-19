@@ -60,6 +60,8 @@ interface EditorState {
   guides: Guide[]
   artboards: Artboard[]
   activeArtboardId: string | null
+  editingNodePathId: string | null
+  selectedNodeIndex: number | null
 
   // Actions
   addShape: (shape: Omit<Shape, 'id'>) => string
@@ -106,6 +108,8 @@ interface EditorState {
   removeArtboard: (id: string) => void
   updateArtboard: (id: string, partial: Partial<Artboard>) => void
   setActiveArtboard: (id: string | null) => void
+  setEditingNodePathId: (id: string | null) => void
+  setSelectedNodeIndex: (i: number | null) => void
 }
 
 export const useEditorStore = create<EditorState>()(
@@ -135,6 +139,8 @@ export const useEditorStore = create<EditorState>()(
     guides: [],
     artboards: [],
     activeArtboardId: null,
+    editingNodePathId: null,
+    selectedNodeIndex: null,
 
     addShape: (shapeData) => {
       const id = nanoid(8)
@@ -409,6 +415,8 @@ export const useEditorStore = create<EditorState>()(
     removeArtboard: (id) => set((s) => { s.artboards = s.artboards.filter((a) => a.id !== id) }),
     updateArtboard: (id, partial) => set((s) => { const a = s.artboards.find((a) => a.id === id); if (a) Object.assign(a, partial) }),
     setActiveArtboard: (id) => set((s) => { s.activeArtboardId = id }),
+    setEditingNodePathId: (id) => set((s) => { s.editingNodePathId = id }),
+    setSelectedNodeIndex: (i) => set((s) => { s.selectedNodeIndex = i }),
 
     commit: () => {
       const { shapes, layerOrder, past, backgroundColor, canvasSize, guides, artboards, swatches } = get()
